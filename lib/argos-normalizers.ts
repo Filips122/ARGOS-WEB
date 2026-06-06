@@ -8,6 +8,7 @@ import {
   severityStats as mockSeverityStats,
   timelineStats as mockTimelineStats,
   topCountries as mockTopCountries,
+  type AgentHealthItem,
   type Attack,
   type Severity,
 } from '@/lib/mock-data';
@@ -40,6 +41,14 @@ type RiskBucket = {
   scores: { score: number; count: number }[];
 };
 
+type SourceGeo = {
+  name: string;
+  country: string;
+  city?: string;
+  lat: number;
+  lon: number;
+};
+
 const fallbackGeo = [
   { name: 'Unknown relay', country: 'UN', lat: 40.4168, lon: -3.7038 },
   { name: 'Europe relay', country: 'EU', lat: 48.8566, lon: 2.3522 },
@@ -54,6 +63,14 @@ const fallbackTargets = [
   { name: 'soc-sensor', country: 'ES', lat: 39.4699, lon: -0.3763 },
   { name: 'vpn-gateway', country: 'ES', lat: 37.3891, lon: -5.9845 },
 ];
+
+function getTargetGeo(agentName: string) {
+  if (agentName.toLowerCase().includes('tpot')) {
+    return { name: 'tpot-honeypot', country: 'ES', lat: 37.9922, lon: -1.1307 };
+  }
+
+  return fallbackTargets[hashIndex(agentName, fallbackTargets.length)];
+}
 
 export type ArgosServiceStatus = {
   manager: 'online' | 'offline' | 'unknown';
@@ -71,7 +88,7 @@ export type ArgosLiveData = {
   agents: unknown[];
   attacks: Attack[];
   kpis: typeof mockKpis;
-  agentHealth: typeof mockAgentHealth;
+  agentHealth: AgentHealthItem[];
   summary: {
     events24h: number;
     alertsLast30d: number;
@@ -154,6 +171,54 @@ function readNumber(value: unknown): number | undefined {
   return Number.isFinite(numeric) ? numeric : undefined;
 }
 
+function readGeoLocation(value: unknown): { lat: number; lon: number } | undefined {
+  if (Array.isArray(value)) {
+    const [lon, lat] = value;
+    const parsedLat = readNumber(lat);
+    const parsedLon = readNumber(lon);
+    return parsedLat !== undefined && parsedLon !== undefined ? { lat: parsedLat, lon: parsedLon } : undefined;
+  }
+
+  if (value && typeof value === 'object') {
+    const location = value as Record<string, unknown>;
+    const lat = readNumber(location.lat);
+    const lon = readNumber(location.lon ?? location.lng);
+    return lat !== undefined && lon !== undefined ? { lat, lon } : undefined;
+  }
+
+  if (typeof value === 'string') {
+    const [latText, lonText] = value.split(',').map((part) => part.trim());
+    const lat = readNumber(latText);
+    const lon = readNumber(lonText);
+    return lat !== undefined && lon !== undefined ? { lat, lon } : undefined;
+  }
+
+  return undefined;
+}
+
+function getSourceGeo(source: Record<string, any>, fallback: (typeof fallbackGeo)[number]): SourceGeo {
+  const geoLocation = source.GeoLocation ?? source.geoip ?? source.source?.geo ?? source.client?.geo ?? source.data?.geoip;
+  const coordinates = readGeoLocation(geoLocation?.location);
+  const country = pickString(
+    geoLocation?.country_name,
+    geoLocation?.country_code2,
+    geoLocation?.country_iso_code
+  );
+  const city = pickString(geoLocation?.city_name);
+
+  if (!coordinates && !country && !city) return fallback;
+
+  const locationName = city ?? country ?? fallback.name;
+
+  return {
+    name: locationName,
+    country: country ?? fallback.country,
+    city,
+    lat: coordinates?.lat ?? fallback.lat,
+    lon: coordinates?.lon ?? fallback.lon,
+  };
+}
+
 function hashIndex(value: string, modulo: number) {
   const sum = value.split('').reduce((total, char) => total + char.charCodeAt(0), 0);
   return sum % modulo;
@@ -194,13 +259,14 @@ export function normalizeWazuhAlerts(alerts: unknown, agents: unknown): Attack[]
       source.remote_ip
     );
     const agentName = pickString(source.agent?.name, source.agent?.id, agentItems[index % Math.max(agentItems.length, 1)]?.name) ?? 'unknown-agent';
-    const srcGeo = fallbackGeo[hashIndex(sourceIp ?? hit._id ?? `${index}`, fallbackGeo.length)];
-    const targetGeo = fallbackTargets[hashIndex(agentName, fallbackTargets.length)];
+    const fallbackSrcGeo = fallbackGeo[hashIndex(sourceIp ?? hit._id ?? `${index}`, fallbackGeo.length)];
+    const srcGeo = getSourceGeo(source, fallbackSrcGeo);
+    const targetGeo = getTargetGeo(agentName);
     const timestamp = pickString(source['@timestamp'], source.timestamp) ?? new Date().toISOString();
 
     return {
       id: hit._id ?? `WAZUH-${index + 1}`,
-      zone: srcGeo.name.replace(' relay', ''),
+      zone: srcGeo.city ?? srcGeo.country ?? srcGeo.name.replace(' relay', ''),
       source: {
         ...srcGeo,
         ip: sourceIp ?? 'unknown',
@@ -370,6 +436,60 @@ function buildAgentHealth(manager: unknown, agents: Record<string, any>[], error
   ];
 }
 
+function buildLiveAgentHealth(
+  manager: unknown,
+  agents: Record<string, any>[],
+  errors: ArgosLiveData['errors'],
+  attacks: Attack[],
+  totalEvents24h: number
+): AgentHealthItem[] {
+  const activeAgents = agents.filter((agent) => agent.status === 'active').length;
+  const disconnectedAgents = agents.filter((agent) => agent.status !== 'active').length;
+  const geoLocatedAttacks = attacks.filter((attack) => Number.isFinite(attack.source.lat) && Number.isFinite(attack.source.lon)).length;
+  const flowsPerMinute = Math.round(totalEvents24h / (24 * 60));
+  const meanScore = attacks.length
+    ? Math.round(attacks.reduce((sum, attack) => sum + attack.score, 0) / attacks.length)
+    : 0;
+
+  return [
+    {
+      name: 'Wazuh Manager',
+      status: errors.manager ? 'offline' : manager ? 'online' : 'learning',
+      metric: errors.manager ? 'sin conexion' : 'manager API',
+    },
+    {
+      name: 'Wazuh Agents',
+      status: errors.agents ? 'offline' : activeAgents > 0 ? 'online' : 'learning',
+      metric: `${activeAgents} activos - ${disconnectedAgents} desconectados`,
+    },
+    {
+      name: 'Wazuh Indexer',
+      status: errors.alerts ? 'offline' : attacks.length > 0 ? 'online' : 'learning',
+      metric: errors.alerts ? 'sin alertas live' : `${attacks.length.toLocaleString('es-ES')} alertas cargadas`,
+    },
+    {
+      name: 'GeoIP Enrichment',
+      status: geoLocatedAttacks > 0 ? 'online' : 'learning',
+      metric: `${geoLocatedAttacks.toLocaleString('es-ES')} origenes geolocalizados`,
+    },
+    {
+      name: 'Risk Scoring',
+      status: attacks.length > 0 ? 'online' : 'learning',
+      metric: `score medio ${meanScore}`,
+    },
+    {
+      name: 'MCP Agents',
+      status: 'planned',
+      metric: 'pendiente de integracion',
+    },
+    {
+      name: 'Flow Average',
+      status: totalEvents24h > 0 ? 'online' : 'learning',
+      metric: `${flowsPerMinute.toLocaleString('es-ES')} flows/min media`,
+    },
+  ];
+}
+
 export function buildArgosLiveData(input: {
   manager: unknown;
   agents: unknown;
@@ -405,7 +525,7 @@ export function buildArgosLiveData(input: {
       : hasLiveContext
       ? buildKpis(normalizedAttacks, agentItems, totalEvents24h, totalAlerts30d, normalizedAttacks.length)
       : mockKpis,
-    agentHealth: buildAgentHealth(input.manager, agentItems, input.errors),
+    agentHealth: buildLiveAgentHealth(input.manager, agentItems, input.errors, normalizedAttacks, totalEvents24h),
     summary: {
       events24h: totalEvents24h,
       alertsLast30d: totalAlerts30d,

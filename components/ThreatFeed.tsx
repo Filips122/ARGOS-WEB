@@ -1,6 +1,20 @@
 import { attacks as mockAttacks, severityColors, type Attack } from '@/lib/mock-data';
 
-export function ThreatFeed({ attacks = mockAttacks, mode = 'demo' }: { attacks?: Attack[]; mode?: 'live' | 'partial' | 'demo' }) {
+function getOriginLabel(attack: Attack) {
+  return [attack.source.city, attack.source.country].filter(Boolean).join(', ') || attack.source.name;
+}
+
+export function ThreatFeed({
+  attacks = mockAttacks,
+  mode = 'demo',
+  selectedAttackId,
+  onSelectAttack,
+}: {
+  attacks?: Attack[];
+  mode?: 'live' | 'partial' | 'demo';
+  selectedAttackId?: string;
+  onSelectAttack?: (attack: Attack) => void;
+}) {
   const topTargets = Array.from(new Set(attacks.map((attack) => attack.target.name))).slice(0, 4);
 
   return (
@@ -15,19 +29,24 @@ export function ThreatFeed({ attacks = mockAttacks, mode = 'demo' }: { attacks?:
 
       <div className="alertStream">
         {attacks.slice(0, 7).map((attack) => (
-          <article className="alertCard" key={attack.id}>
+          <button
+            type="button"
+            className={`alertCard${selectedAttackId === attack.id ? ' active' : ''}`}
+            key={attack.id}
+            onClick={() => onSelectAttack?.(attack)}
+          >
             <div className="alertMeta">
               <span style={{ color: severityColors[attack.severity] }}>{attack.severity.toUpperCase()}</span>
               <small>{attack.timestamp}</small>
             </div>
             <h3>{attack.type}</h3>
-            <p>{attack.source.country} → {attack.target.name}</p>
+            <p>{getOriginLabel(attack)} → {attack.target.name}</p>
             <div className="alertFooter">
               <span>AI {attack.score}</span>
               <span>Rule {attack.wazuhRule}</span>
               <span>{attack.mcpTool}</span>
             </div>
-          </article>
+          </button>
         ))}
       </div>
 

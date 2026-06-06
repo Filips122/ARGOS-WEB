@@ -6,6 +6,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { attacks as mockAttacks, severityColors, type Attack } from '@/lib/mock-data';
 
 const Globe = dynamic(() => import('react-globe.gl'), { ssr: false }) as any;
+const ACTIVE_ATTACK_WINDOW_MS = 120_000;
+const pinnedAttackColor = '#b56cff';
 
 type GlobePoint = {
   id: string;
@@ -18,8 +20,28 @@ type GlobePoint = {
   label: string;
   selected: boolean;
   attack?: Attack;
+  source?: Attack['source'];
+  sourceAttacks?: Attack[];
   target?: Attack['target'];
   targetAttacks?: Attack[];
+};
+
+type AttackArc = Attack & {
+  startLat: number;
+  startLng: number;
+  endLat: number;
+  endLng: number;
+  color: string;
+  dashInitialGap: number;
+  dashAnimateTime: number;
+  label: string;
+};
+
+const severityRank: Record<Attack['severity'], number> = {
+  critical: 0,
+  high: 1,
+  medium: 2,
+  low: 3,
 };
 
 function getGlobeCoords(lat: number, lng: number, altitude: number) {
@@ -53,31 +75,138 @@ function getAttackAgeMs(attack: Attack, now: number) {
   return value * 60 * 60_000;
 }
 
+function getOriginLabel(attack: Attack) {
+  return [attack.source.city, attack.source.country].filter(Boolean).join(', ') || attack.source.name;
+}
+
+function getStableUnitInterval(value: string) {
+  const hash = value.split('').reduce((total, char) => ((total << 5) - total + char.charCodeAt(0)) | 0, 0);
+  return Math.abs(hash % 1000) / 1000;
+}
+
+function sortAttacksForSelection(attacks: Attack[]) {
+  const now = Date.now();
+
+  return [...attacks].sort((a, b) => {
+    const ageDelta = getAttackAgeMs(b, now) - getAttackAgeMs(a, now);
+    if (ageDelta !== 0) return ageDelta;
+    return severityRank[a.severity] - severityRank[b.severity];
+  });
+}
+
 export function AttackGlobe({
   attacks = mockAttacks,
   mode = 'demo',
   alertsTotal30d,
+  selectedPinnedAttack,
+  onSelectedPinnedAttackChange,
 }: {
   attacks?: Attack[];
   mode?: 'live' | 'partial' | 'demo';
   alertsTotal30d?: number;
+  selectedPinnedAttack?: Attack | null;
+  onSelectedPinnedAttackChange?: (attack: Attack | null) => void;
 }) {
   const shellRef = useRef<HTMLDivElement | null>(null);
   const [size, setSize] = useState({ width: 960, height: 620 });
   const [selectedAttack, setSelectedAttack] = useState<Attack | null>(null);
+  const [selectedSource, setSelectedSource] = useState<GlobePoint | null>(null);
   const [selectedTarget, setSelectedTarget] = useState<GlobePoint | null>(null);
+  const [selectedTableAttack, setSelectedTableAttack] = useState<Attack | null>(null);
   const [alertsPage, setAlertsPage] = useState(0);
-  const [now, setNow] = useState(() => Date.now());
+  const anchoredAlertIdRef = useRef<string | null>(null);
+  const [globeAttacks, setGlobeAttacks] = useState<Attack[]>([]);
+  const stableAttackCacheRef = useRef(new Map<string, Attack>());
+  const stableArcCacheRef = useRef(new Map<string, AttackArc>());
+
+  const selectPinnedAttack = (attack: Attack) => {
+    setSelectedAttack(attack);
+    setSelectedTableAttack(attack);
+    setSelectedSource(null);
+    setSelectedTarget(null);
+    onSelectedPinnedAttackChange?.(attack);
+  };
+
+  const clearPinnedAttack = (attackId?: string) => {
+    setSelectedTableAttack(null);
+
+    if (!attackId || selectedAttack?.id === attackId) {
+      setSelectedAttack(null);
+      setSelectedSource(null);
+      setSelectedTarget(null);
+      onSelectedPinnedAttackChange?.(null);
+    }
+  };
 
   useEffect(() => {
-    const interval = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(interval);
-  }, []);
+    if (!selectedPinnedAttack) return;
 
-  const globeAttacks = useMemo(
-    () => attacks.filter((attack) => getAttackAgeMs(attack, now) <= 60_000),
-    [attacks, now]
-  );
+    setSelectedAttack(selectedPinnedAttack);
+    setSelectedTableAttack(selectedPinnedAttack);
+    setSelectedSource(null);
+    setSelectedTarget(null);
+  }, [selectedPinnedAttack]);
+
+  useEffect(() => {
+    setGlobeAttacks((currentAttacks) => {
+      const now = Date.now();
+      const currentById = new Map(currentAttacks.map((attack) => [attack.id, attack]));
+      const nextAttacks = attacks.reduce<Attack[]>((activeAttacks, attack) => {
+        if (getAttackAgeMs(attack, now) > ACTIVE_ATTACK_WINDOW_MS && selectedAttack?.id !== attack.id) return activeAttacks;
+
+        const stableAttack = currentById.get(attack.id) ?? stableAttackCacheRef.current.get(attack.id) ?? attack;
+        stableAttackCacheRef.current.set(attack.id, stableAttack);
+        activeAttacks.push(stableAttack);
+        return activeAttacks;
+      }, []);
+
+      if (selectedAttack && !nextAttacks.some((attack) => attack.id === selectedAttack.id)) {
+        const stableAttack = currentById.get(selectedAttack.id) ?? stableAttackCacheRef.current.get(selectedAttack.id) ?? selectedAttack;
+        stableAttackCacheRef.current.set(selectedAttack.id, stableAttack);
+        nextAttacks.push(stableAttack);
+      }
+
+      const activeIds = new Set(nextAttacks.map((attack) => attack.id));
+
+      for (const cachedId of stableAttackCacheRef.current.keys()) {
+        if (!activeIds.has(cachedId)) stableAttackCacheRef.current.delete(cachedId);
+      }
+
+      for (const cachedId of stableArcCacheRef.current.keys()) {
+        if (!activeIds.has(cachedId)) stableArcCacheRef.current.delete(cachedId);
+      }
+
+      const unchanged = currentAttacks.length === nextAttacks.length
+        && currentAttacks.every((attack, index) => attack === nextAttacks[index]);
+
+      return unchanged ? currentAttacks : nextAttacks;
+    });
+  }, [attacks, selectedAttack]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      setGlobeAttacks((currentAttacks) => {
+        const now = Date.now();
+        const nextAttacks = currentAttacks.filter((attack) => (
+          getAttackAgeMs(attack, now) <= ACTIVE_ATTACK_WINDOW_MS || selectedAttack?.id === attack.id
+        ));
+
+        if (nextAttacks.length === currentAttacks.length) return currentAttacks;
+
+        const activeIds = new Set(nextAttacks.map((attack) => attack.id));
+        for (const cachedId of stableAttackCacheRef.current.keys()) {
+          if (!activeIds.has(cachedId)) stableAttackCacheRef.current.delete(cachedId);
+        }
+        for (const cachedId of stableArcCacheRef.current.keys()) {
+          if (!activeIds.has(cachedId)) stableArcCacheRef.current.delete(cachedId);
+        }
+
+        return nextAttacks;
+      });
+    }, 5000);
+
+    return () => window.clearInterval(interval);
+  }, [selectedAttack]);
 
   useEffect(() => {
     const element = shellRef.current;
@@ -94,18 +223,28 @@ export function AttackGlobe({
     return () => observer.disconnect();
   }, []);
 
-  const arcsData = useMemo(() => globeAttacks.map((attack) => ({
-    ...attack,
-    startLat: attack.source.lat,
-    startLng: attack.source.lon,
-    endLat: attack.target.lat,
-    endLng: attack.target.lon,
-    color: severityColors[attack.severity],
-    label: `${attack.id} - ${attack.type} - ${attack.source.country} -> ${attack.target.name} - IA ${attack.score}`,
-  })), [globeAttacks]);
+  const arcsData = useMemo(() => globeAttacks.map((attack) => {
+    const cachedArc = stableArcCacheRef.current.get(attack.id);
+    if (cachedArc) return cachedArc;
+
+    const arc: AttackArc = {
+      ...attack,
+      startLat: attack.source.lat,
+      startLng: attack.source.lon,
+      endLat: attack.target.lat,
+      endLng: attack.target.lon,
+      color: severityColors[attack.severity],
+      dashInitialGap: getStableUnitInterval(attack.id),
+      dashAnimateTime: attack.severity === 'critical' ? 2600 : 3800,
+      label: `${attack.id} - ${attack.type} - ${getOriginLabel(attack)} -> ${attack.target.name} - IA ${attack.score}`,
+    };
+
+    stableArcCacheRef.current.set(attack.id, arc);
+    return arc;
+  }), [globeAttacks]);
 
   const pointsData = useMemo<GlobePoint[]>(() => {
-    const selectedSourceId = selectedAttack ? `${selectedAttack.id}-src` : null;
+    const selectedSourceId = selectedSource?.id ?? null;
     const selectedTargetId = selectedTarget?.id ?? null;
     const targets = Array.from(
       globeAttacks.reduce((groups, attack) => {
@@ -121,37 +260,61 @@ export function AttackGlobe({
         return groups;
       }, new Map<string, Attack[]>())
     ).map(([key, targetAttacks]) => {
-      const firstAttack = targetAttacks[0];
-      return {
+        const firstAttack = targetAttacks[0];
+        const hasSelectedAttack = targetAttacks.some((attack) => attack.id === selectedAttack?.id);
+        return {
         id: `target-${key}`,
         role: 'target' as const,
         lat: firstAttack.target.lat,
         lng: firstAttack.target.lon,
-        color: '#5eb6ff',
+        color: hasSelectedAttack ? pinnedAttackColor : '#5eb6ff',
         altitude: 0.035,
         size: 1.28,
-        selected: selectedTargetId === `target-${key}`,
+        selected: selectedTargetId === `target-${key}` || hasSelectedAttack,
         label: `Destino: ${firstAttack.target.name} - ${targetAttacks.length} ataque${targetAttacks.length > 1 ? 's' : ''}`,
         target: firstAttack.target,
         targetAttacks,
       };
     });
 
-    const sources = globeAttacks.map((attack) => ({
-      id: `${attack.id}-src`,
-      role: 'source' as const,
-      lat: attack.source.lat,
-      lng: attack.source.lon,
-      color: severityColors[attack.severity],
-      altitude: 0.025,
-      size: attack.severity === 'critical' ? 1.38 : 1.08,
-      selected: selectedSourceId === `${attack.id}-src`,
-      label: `Origen: ${attack.source.country} - ${attack.source.ip}`,
-      attack,
-    }));
+    const sources = Array.from(
+      globeAttacks.reduce((groups, attack) => {
+        const key = `${attack.source.ip ?? attack.source.name}-${attack.source.lat}-${attack.source.lon}`;
+        const group = groups.get(key);
+
+        if (group) {
+          group.push(attack);
+        } else {
+          groups.set(key, [attack]);
+        }
+
+        return groups;
+      }, new Map<string, Attack[]>())
+    ).map(([key, sourceAttacks]) => {
+      const sortedSourceAttacks = sortAttacksForSelection(sourceAttacks);
+      const firstAttack = sortedSourceAttacks[0];
+      const hasSelectedAttack = sourceAttacks.some((attack) => attack.id === selectedAttack?.id);
+      const highestSeverityAttack = sortedSourceAttacks.reduce((highest, attack) => (
+        severityRank[attack.severity] < severityRank[highest.severity] ? attack : highest
+      ), firstAttack);
+
+      return {
+        id: `source-${key}`,
+        role: 'source' as const,
+        lat: firstAttack.source.lat,
+        lng: firstAttack.source.lon,
+        color: hasSelectedAttack ? pinnedAttackColor : severityColors[highestSeverityAttack.severity],
+        altitude: 0.025,
+        size: highestSeverityAttack.severity === 'critical' ? 1.38 : 1.08,
+        selected: selectedSourceId === `source-${key}` || hasSelectedAttack,
+        label: `Origen: ${getOriginLabel(firstAttack)} - ${sourceAttacks.length} ataque${sourceAttacks.length > 1 ? 's' : ''}`,
+        source: firstAttack.source,
+        sourceAttacks: sortedSourceAttacks,
+      };
+    });
 
     return [...sources, ...targets];
-  }, [globeAttacks, selectedAttack, selectedTarget]);
+  }, [globeAttacks, selectedAttack, selectedSource, selectedTarget]);
 
   const ringsData = useMemo(() => globeAttacks.map((attack) => ({
     lat: attack.target.lat,
@@ -172,8 +335,27 @@ export function AttackGlobe({
   );
 
   useEffect(() => {
-    setAlertsPage(0);
-  }, [attacks]);
+    setAlertsPage((currentPage) => {
+      const anchoredAlertId = anchoredAlertIdRef.current;
+
+      if (anchoredAlertId) {
+        const anchoredIndex = attacks.findIndex((attack) => attack.id === anchoredAlertId);
+        if (anchoredIndex >= 0) return Math.min(alertsPageCount - 1, Math.floor(anchoredIndex / alertsPageSize));
+      }
+
+      return Math.min(currentPage, alertsPageCount - 1);
+    });
+  }, [attacks, alertsPageCount]);
+
+  useEffect(() => {
+    anchoredAlertIdRef.current = pipelineAlerts[0]?.id ?? null;
+  }, [pipelineAlerts]);
+
+  const goToAlertsPage = (page: number) => {
+    const nextPage = Math.min(alertsPageCount - 1, Math.max(0, page));
+    anchoredAlertIdRef.current = attacks[nextPage * alertsPageSize]?.id ?? null;
+    setAlertsPage(nextPage);
+  };
 
   return (
     <section className="globeCommand">
@@ -194,7 +376,7 @@ export function AttackGlobe({
         <div className="globeHud hudTopLeft">
           <span>ACTIVE ROUTES</span>
           <b>{globeAttacks.length}</b>
-          <small>ultimos 60s</small>
+          <small>ultimos 120s</small>
         </div>
         <div className="globeHud hudBottomRight">
           <span>PIPELINE</span>
@@ -212,13 +394,17 @@ export function AttackGlobe({
           arcStartLng="startLng"
           arcEndLat="endLat"
           arcEndLng="endLng"
-          arcColor={(arc: any) => [arc.color, '#38f8d4']}
+          arcColor={(arc: any) => {
+            const color = arc.id === selectedAttack?.id ? pinnedAttackColor : arc.color;
+            return [color, color];
+          }}
           arcAltitude={(arc: any) => arc.severity === 'critical' ? 0.36 : 0.24}
           arcStroke={(arc: any) => arc.severity === 'critical' ? 0.9 : 0.5}
-          arcDashLength={0.38}
-          arcDashGap={0.22}
-          arcDashInitialGap={() => Math.random()}
-          arcDashAnimateTime={(arc: any) => arc.severity === 'critical' ? 1100 : 1850}
+          arcDashLength={0.28}
+          arcDashGap={0.16}
+          arcDashInitialGap="dashInitialGap"
+          arcDashAnimateTime="dashAnimateTime"
+          arcsTransitionDuration={0}
           arcLabel="label"
           customLayerData={pointsData}
           customThreeObject={(point: GlobePoint) => {
@@ -239,13 +425,23 @@ export function AttackGlobe({
           }}
           customLayerLabel="label"
           onCustomLayerClick={(point: GlobePoint) => {
-            if (point.role === 'source' && point.attack) {
-              setSelectedAttack(point.attack);
+            if (point.role === 'source') {
+              const sourceAttacks = point.sourceAttacks ?? [];
+
+              if (sourceAttacks.length <= 1) {
+                setSelectedAttack(sourceAttacks[0] ?? point.attack ?? null);
+                setSelectedSource(null);
+              } else {
+                setSelectedSource(point);
+                setSelectedAttack(null);
+              }
+
               setSelectedTarget(null);
             }
 
             if (point.role === 'target') {
               setSelectedTarget(point);
+              setSelectedSource(null);
               setSelectedAttack(null);
             }
           }}
@@ -262,17 +458,28 @@ export function AttackGlobe({
         />
 
         {selectedAttack && (
-          <AttackDetailCard attack={selectedAttack} onClose={() => setSelectedAttack(null)} />
+          <AttackDetailCard
+            attack={selectedAttack}
+            onClose={() => {
+              clearPinnedAttack(selectedAttack.id);
+            }}
+            onBack={selectedSource || selectedTarget ? () => setSelectedAttack(null) : undefined}
+          />
+        )}
+
+        {selectedSource && !selectedAttack && (
+          <SourceAttackList
+            sourcePoint={selectedSource}
+            onClose={() => setSelectedSource(null)}
+            onSelectAttack={(attack) => setSelectedAttack(attack)}
+          />
         )}
 
         {selectedTarget && !selectedAttack && (
           <TargetAttackList
             targetPoint={selectedTarget}
             onClose={() => setSelectedTarget(null)}
-            onSelectAttack={(attack) => {
-              setSelectedAttack(attack);
-              setSelectedTarget(null);
-            }}
+            onSelectAttack={(attack) => setSelectedAttack(attack)}
           />
         )}
       </div>
@@ -301,7 +508,23 @@ export function AttackGlobe({
           <div className="wazuhPager">
             <button
               type="button"
-              onClick={() => setAlertsPage((page) => Math.max(0, page - 1))}
+              onClick={() => goToAlertsPage(0)}
+              disabled={alertsPage === 0}
+              aria-label="Primera pagina de alertas Wazuh"
+            >
+              First
+            </button>
+            <button
+              type="button"
+              onClick={() => goToAlertsPage(alertsPage - 10)}
+              disabled={alertsPage === 0}
+              aria-label="Retroceder diez paginas de alertas Wazuh"
+            >
+              -10
+            </button>
+            <button
+              type="button"
+              onClick={() => goToAlertsPage(alertsPage - 1)}
               disabled={alertsPage === 0}
               aria-label="Pagina anterior de alertas Wazuh"
             >
@@ -310,20 +533,47 @@ export function AttackGlobe({
             <span>{alertsPage + 1}/{alertsPageCount}</span>
             <button
               type="button"
-              onClick={() => setAlertsPage((page) => Math.min(alertsPageCount - 1, page + 1))}
+              onClick={() => goToAlertsPage(alertsPage + 1)}
               disabled={alertsPage >= alertsPageCount - 1}
               aria-label="Pagina siguiente de alertas Wazuh"
             >
               Next
             </button>
+            <button
+              type="button"
+              onClick={() => goToAlertsPage(alertsPage + 10)}
+              disabled={alertsPage >= alertsPageCount - 1}
+              aria-label="Avanzar diez paginas de alertas Wazuh"
+            >
+              +10
+            </button>
+            <button
+              type="button"
+              onClick={() => goToAlertsPage(alertsPageCount - 1)}
+              disabled={alertsPage >= alertsPageCount - 1}
+              aria-label="Ultima pagina de alertas Wazuh"
+            >
+              Last
+            </button>
           </div>
         </div>
+
+        {selectedTableAttack && (
+          <AttackDetailCard
+            attack={selectedTableAttack}
+            className="tableAttackDetail"
+            onClose={() => {
+              clearPinnedAttack(selectedTableAttack.id);
+            }}
+          />
+        )}
 
         <div className="wazuhAlertRows" role="table">
           <div className="wazuhAlertRow wazuhAlertHead" role="row">
             <span role="columnheader">Severidad</span>
             <span role="columnheader">Tipo</span>
             <span role="columnheader">Origen</span>
+            <span role="columnheader">IP origen</span>
             <span role="columnheader">Destino</span>
             <span role="columnheader">Regla</span>
             <span role="columnheader">AI</span>
@@ -335,13 +585,13 @@ export function AttackGlobe({
               role="row"
               key={attack.id}
               onClick={() => {
-                setSelectedAttack(attack);
-                setSelectedTarget(null);
+                selectPinnedAttack(attack);
               }}
             >
               <span role="cell" style={{ color: severityColors[attack.severity] }}>{attack.severity.toUpperCase()}</span>
               <span role="cell">{attack.type}</span>
-              <span role="cell">{attack.source.ip ?? attack.source.country}</span>
+              <span role="cell">{getOriginLabel(attack)}</span>
+              <span role="cell">{attack.source.ip ?? 'unknown'}</span>
               <span role="cell">{attack.target.name}</span>
               <span role="cell">{attack.wazuhRule}</span>
               <span role="cell">{attack.score}</span>
@@ -353,15 +603,28 @@ export function AttackGlobe({
   );
 }
 
-function AttackDetailCard({ attack, onClose }: { attack: Attack; onClose: () => void }) {
+function AttackDetailCard({
+  attack,
+  onClose,
+  onBack,
+  className,
+}: {
+  attack: Attack;
+  onClose: () => void;
+  onBack?: () => void;
+  className?: string;
+}) {
   return (
-    <article className="attackDetailCard" aria-live="polite">
+    <article className={`attackDetailCard${className ? ` ${className}` : ''}`} aria-live="polite">
       <div className="attackDetailHeader">
         <div>
           <span style={{ color: severityColors[attack.severity] }}>{attack.severity.toUpperCase()}</span>
           <h3>{attack.type}</h3>
         </div>
-        <button type="button" onClick={onClose} aria-label="Cerrar detalle de ataque">x</button>
+        <div className="attackDetailActions">
+          {onBack && <button type="button" onClick={onBack} aria-label="Volver a la lista de ataques">Back</button>}
+          <button type="button" onClick={onClose} aria-label="Cerrar detalle de ataque">x</button>
+        </div>
       </div>
       <div className="attackDetailMeta">
         <b>{attack.id}</b>
@@ -369,8 +632,9 @@ function AttackDetailCard({ attack, onClose }: { attack: Attack; onClose: () => 
         <span>AI {attack.score}</span>
       </div>
       <dl className="attackDetailGrid">
-        <div><dt>Origen</dt><dd>{attack.source.name} ({attack.source.country})</dd></div>
+        <div><dt>Origen</dt><dd>{getOriginLabel(attack)}</dd></div>
         <div><dt>IP origen</dt><dd>{attack.source.ip}</dd></div>
+        <div><dt>Coordenadas</dt><dd>{attack.source.lat.toFixed(4)}, {attack.source.lon.toFixed(4)}</dd></div>
         <div><dt>Destino</dt><dd>{attack.target.name}</dd></div>
         <div><dt>Agente</dt><dd>{attack.agent}</dd></div>
         <div><dt>Zona</dt><dd>{attack.zone}</dd></div>
@@ -384,6 +648,44 @@ function AttackDetailCard({ attack, onClose }: { attack: Attack; onClose: () => 
   );
 }
 
+function SourceAttackList({
+  sourcePoint,
+  onClose,
+  onSelectAttack,
+}: {
+  sourcePoint: GlobePoint;
+  onClose: () => void;
+  onSelectAttack: (attack: Attack) => void;
+}) {
+  const sourceAttacks = sortAttacksForSelection(sourcePoint.sourceAttacks ?? []);
+
+  return (
+    <article className="attackDetailCard targetAttackCard" aria-live="polite">
+      <div className="attackDetailHeader">
+        <div>
+          <span>ORIGEN</span>
+          <h3>{sourcePoint.source ? [sourcePoint.source.city, sourcePoint.source.country].filter(Boolean).join(', ') || sourcePoint.source.name : 'Origen'}</h3>
+        </div>
+        <button type="button" onClick={onClose} aria-label="Cerrar ataques del origen">x</button>
+      </div>
+      <div className="attackDetailMeta">
+        <b>{sourcePoint.source?.ip ?? 'unknown'}</b>
+        <span>{sourceAttacks.length} ataque{sourceAttacks.length !== 1 ? 's' : ''}</span>
+        <span>{sourceAttacks[0]?.timestamp}</span>
+      </div>
+      <div className="targetAttackList">
+        {sourceAttacks.map((attack) => (
+          <button type="button" key={attack.id} onClick={() => onSelectAttack(attack)}>
+            <span style={{ color: severityColors[attack.severity] }}>{attack.severity.toUpperCase()}</span>
+            <b>{attack.type}</b>
+            <small>{attack.timestamp} - {attack.target.name} - AI {attack.score}</small>
+          </button>
+        ))}
+      </div>
+    </article>
+  );
+}
+
 function TargetAttackList({
   targetPoint,
   onClose,
@@ -393,7 +695,7 @@ function TargetAttackList({
   onClose: () => void;
   onSelectAttack: (attack: Attack) => void;
 }) {
-  const targetAttacks = targetPoint.targetAttacks ?? [];
+  const targetAttacks = sortAttacksForSelection(targetPoint.targetAttacks ?? []);
 
   return (
     <article className="attackDetailCard targetAttackCard" aria-live="polite">
@@ -414,7 +716,7 @@ function TargetAttackList({
           <button type="button" key={attack.id} onClick={() => onSelectAttack(attack)}>
             <span style={{ color: severityColors[attack.severity] }}>{attack.severity.toUpperCase()}</span>
             <b>{attack.type}</b>
-            <small>{attack.source.country} - {attack.source.ip} - AI {attack.score}</small>
+            <small>{getOriginLabel(attack)} - {attack.source.ip} - AI {attack.score}</small>
           </button>
         ))}
       </div>

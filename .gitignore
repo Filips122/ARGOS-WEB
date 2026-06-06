@@ -3,3 +3,4 @@
 node_modules
 .next
 .next-dev*
+.next-start*
