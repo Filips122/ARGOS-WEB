@@ -1,0 +1,430 @@
+import {
+  agentHealth as mockAgentHealth,
+  attackTypeStats as mockAttackTypeStats,
+  attacks as mockAttacks,
+  kpis as mockKpis,
+  mitreStats as mockMitreStats,
+  severityColors,
+  severityStats as mockSeverityStats,
+  timelineStats as mockTimelineStats,
+  topCountries as mockTopCountries,
+  type Attack,
+  type Severity,
+} from '@/lib/mock-data';
+
+type WazuhHit = {
+  _id?: string;
+  _source?: Record<string, any>;
+};
+
+type WazuhSearchResponse = {
+  hits?: {
+    total?: number | { value?: number };
+    hits?: WazuhHit[];
+  };
+};
+
+type WazuhAgentsResponse = {
+  data?: {
+    affected_items?: Array<Record<string, any>>;
+    total_affected_items?: number;
+  };
+};
+
+type RiskBucket = {
+  label: string;
+  min: number;
+  max: number;
+  count: number;
+  tone: 'low' | 'medium' | 'high' | 'critical';
+  scores: { score: number; count: number }[];
+};
+
+const fallbackGeo = [
+  { name: 'Unknown relay', country: 'UN', lat: 40.4168, lon: -3.7038 },
+  { name: 'Europe relay', country: 'EU', lat: 48.8566, lon: 2.3522 },
+  { name: 'Atlantic relay', country: 'US', lat: 40.7128, lon: -74.006 },
+  { name: 'South America relay', country: 'BR', lat: -23.5558, lon: -46.6396 },
+  { name: 'Asia relay', country: 'SG', lat: 1.3521, lon: 103.8198 },
+];
+
+const fallbackTargets = [
+  { name: 'wazuh-agent', country: 'ES', lat: 40.4168, lon: -3.7038 },
+  { name: 'dmz-web', country: 'ES', lat: 41.3874, lon: 2.1686 },
+  { name: 'soc-sensor', country: 'ES', lat: 39.4699, lon: -0.3763 },
+  { name: 'vpn-gateway', country: 'ES', lat: 37.3891, lon: -5.9845 },
+];
+
+export type ArgosServiceStatus = {
+  manager: 'online' | 'offline' | 'unknown';
+  agents: 'online' | 'offline' | 'unknown';
+  indexer: 'online' | 'offline' | 'unknown';
+  mode: 'live' | 'partial' | 'demo';
+};
+
+export type ArgosLiveData = {
+  ok: true;
+  updatedAt: string;
+  mode: 'live' | 'partial' | 'demo';
+  serviceStatus: ArgosServiceStatus;
+  manager: unknown;
+  agents: unknown[];
+  attacks: Attack[];
+  kpis: typeof mockKpis;
+  agentHealth: typeof mockAgentHealth;
+  summary: {
+    events24h: number;
+    alertsLast30d: number;
+    loadedAlertsLast30d: number;
+  };
+  charts: {
+    attacksByType: typeof mockAttackTypeStats;
+    severityDistribution: typeof mockSeverityStats;
+    alertsTimeline: typeof mockTimelineStats;
+    topCountries: typeof mockTopCountries;
+    mitreTactics: typeof mockMitreStats;
+    riskDistribution: RiskBucket[];
+    correlationSources: { label: string; value: number }[];
+  };
+  errors: {
+    manager: string | null;
+    agents: string | null;
+    alerts: string | null;
+  };
+};
+
+export function mapWazuhLevelToSeverity(level?: number): Severity {
+  if (level === undefined || Number.isNaN(level)) return 'low';
+  if (level >= 12) return 'critical';
+  if (level >= 9) return 'high';
+  if (level >= 6) return 'medium';
+  return 'low';
+}
+
+export function estimateAiScoreFromWazuhLevel(level?: number): number {
+  if (level === undefined || Number.isNaN(level)) return 20;
+  return Math.min(100, Math.max(5, Math.round(level * 7.5)));
+}
+
+export function inferAttackType(description?: string): string {
+  const text = description?.toLowerCase() ?? '';
+
+  if (text.includes('brute') || text.includes('authentication failure') || text.includes('multiple failed')) {
+    return 'SSH brute force';
+  }
+
+  if (text.includes('scan') || text.includes('nmap')) {
+    return 'Port scan';
+  }
+
+  if (text.includes('sql')) {
+    return 'SQLi probe';
+  }
+
+  if (text.includes('malware') || text.includes('trojan') || text.includes('virus')) {
+    return 'Malware callback';
+  }
+
+  if (text.includes('privilege') || text.includes('sudo')) {
+    return 'Privilege escalation';
+  }
+
+  if (text.includes('authentication') || text.includes('login') || text.includes('credential')) {
+    return 'Suspicious auth burst';
+  }
+
+  return 'Suspicious activity';
+}
+
+function inferMitreTactic(source: Record<string, any>, attackType: string): string {
+  const tactic = source.rule?.mitre?.tactic?.[0] ?? source.rule?.mitre?.tactics?.[0];
+  if (typeof tactic === 'string') return tactic;
+  if (attackType.toLowerCase().includes('brute') || attackType.toLowerCase().includes('auth')) return 'Credential Access';
+  if (attackType.toLowerCase().includes('scan')) return 'Discovery';
+  if (attackType.toLowerCase().includes('malware')) return 'Command and Control';
+  return 'Initial Access';
+}
+
+function pickString(...values: unknown[]): string | undefined {
+  return values.find((value): value is string => typeof value === 'string' && value.length > 0);
+}
+
+function readNumber(value: unknown): number | undefined {
+  const numeric = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(numeric) ? numeric : undefined;
+}
+
+function hashIndex(value: string, modulo: number) {
+  const sum = value.split('').reduce((total, char) => total + char.charCodeAt(0), 0);
+  return sum % modulo;
+}
+
+function getAlertHits(alerts: unknown): WazuhHit[] {
+  const response = alerts as WazuhSearchResponse | null;
+  return response?.hits?.hits ?? [];
+}
+
+function getTotalAlerts(alerts: unknown, fallback: number) {
+  const total = (alerts as WazuhSearchResponse | null)?.hits?.total;
+  if (typeof total === 'number') return total;
+  if (typeof total?.value === 'number') return total.value;
+  return fallback;
+}
+
+function normalizeAgents(agents: unknown): Record<string, any>[] {
+  return ((agents as WazuhAgentsResponse | null)?.data?.affected_items ?? []) as Record<string, any>[];
+}
+
+export function normalizeWazuhAlerts(alerts: unknown, agents: unknown): Attack[] {
+  const hits = getAlertHits(alerts);
+  const agentItems = normalizeAgents(agents);
+
+  return hits.map((hit, index) => {
+    const source = hit._source ?? {};
+    const level = readNumber(source.rule?.level);
+    const severity = mapWazuhLevelToSeverity(level);
+    const description = pickString(source.rule?.description, source.title, source.full_log) ?? 'Wazuh alert';
+    const attackType = inferAttackType(description);
+    const sourceIp = pickString(
+      source.data?.srcip,
+      source.data?.src_ip,
+      source.srcip,
+      source.source?.ip,
+      source.client?.ip,
+      source.remote_ip
+    );
+    const agentName = pickString(source.agent?.name, source.agent?.id, agentItems[index % Math.max(agentItems.length, 1)]?.name) ?? 'unknown-agent';
+    const srcGeo = fallbackGeo[hashIndex(sourceIp ?? hit._id ?? `${index}`, fallbackGeo.length)];
+    const targetGeo = fallbackTargets[hashIndex(agentName, fallbackTargets.length)];
+    const timestamp = pickString(source['@timestamp'], source.timestamp) ?? new Date().toISOString();
+
+    return {
+      id: hit._id ?? `WAZUH-${index + 1}`,
+      zone: srcGeo.name.replace(' relay', ''),
+      source: {
+        ...srcGeo,
+        ip: sourceIp ?? 'unknown',
+      },
+      target: {
+        ...targetGeo,
+        name: agentName,
+        ip: pickString(source.agent?.ip, source.host?.ip),
+      },
+      type: attackType,
+      tactic: inferMitreTactic(source, attackType),
+      severity,
+      score: estimateAiScoreFromWazuhLevel(level),
+      agent: agentName,
+      wazuhRule: pickString(source.rule?.id) ?? 'N/A',
+      suricataSid: pickString(source.rule?.sid, source.data?.sid) ?? 'N/A',
+      mcpTool: attackType.toLowerCase().includes('auth') || attackType.toLowerCase().includes('brute') ? 'auth.window' : 'wazuh.triage',
+      sensorSources: ['Wazuh', 'AI Engine'],
+      timestamp: formatRelativeTimestamp(timestamp),
+      receivedAt: timestamp,
+    };
+  });
+}
+
+function formatRelativeTimestamp(timestamp: string) {
+  const date = new Date(timestamp);
+  const diffMs = Date.now() - date.getTime();
+
+  if (!Number.isFinite(diffMs) || diffMs < 0) return timestamp;
+  const diffSeconds = Math.floor(diffMs / 1000);
+  if (diffSeconds < 60) return `hace ${diffSeconds}s`;
+  const diffMinutes = Math.floor(diffSeconds / 60);
+  if (diffMinutes < 60) return `hace ${diffMinutes}m`;
+  const diffHours = Math.floor(diffMinutes / 60);
+  return `hace ${diffHours}h`;
+}
+
+function countBy<T extends string>(items: T[]) {
+  return items.reduce((counts, item) => {
+    counts.set(item, (counts.get(item) ?? 0) + 1);
+    return counts;
+  }, new Map<T, number>());
+}
+
+function toChartRows(map: Map<string, number>, fallback: { label: string; value: number }[], limit = 6) {
+  const rows = Array.from(map, ([label, value]) => ({ label, value }))
+    .sort((a, b) => b.value - a.value)
+    .slice(0, limit);
+  return rows.length > 0 ? rows : fallback;
+}
+
+function buildSeverityStats(attacks: Attack[]) {
+  const counts = countBy(attacks.map((attack) => attack.severity));
+  return (['critical', 'high', 'medium', 'low'] as Severity[]).map((severity) => ({
+    label: severity.charAt(0).toUpperCase() + severity.slice(1),
+    value: counts.get(severity) ?? 0,
+    color: severityColors[severity],
+  }));
+}
+
+function buildEmptySeverityStats() {
+  return (['critical', 'high', 'medium', 'low'] as Severity[]).map((severity) => ({
+    label: severity.charAt(0).toUpperCase() + severity.slice(1),
+    value: 0,
+    color: severityColors[severity],
+  }));
+}
+
+function buildEmptyTimeline() {
+  return ['00h', '03h', '06h', '09h', '12h', '15h', '18h', '21h'].map((label) => ({
+    label,
+    alerts: 0,
+    ai: 0,
+  }));
+}
+
+function buildTimeline(attacks: Attack[]) {
+  if (attacks.length === 0) return mockTimelineStats;
+  const labels = ['00h', '03h', '06h', '09h', '12h', '15h', '18h', '21h'];
+  return labels.map((label, index) => {
+    const slice = attacks.filter((_, attackIndex) => attackIndex % labels.length === index);
+    const alerts = slice.length;
+    const ai = slice.filter((attack) => attack.score >= 70).length;
+    return { label, alerts, ai };
+  });
+}
+
+function buildKpis(
+  attacks: Attack[],
+  agents: Record<string, any>[],
+  totalEvents24h: number,
+  totalAlerts30d: number,
+  loadedAlerts30d: number
+) {
+  if (attacks.length === 0 && agents.length === 0) return mockKpis;
+  const critical = attacks.filter((attack) => attack.severity === 'critical').length;
+  const activeAgents = agents.filter((agent) => agent.status === 'active').length;
+  const disconnectedAgents = agents.filter((agent) => agent.status !== 'active').length;
+  const meanScore = attacks.length
+    ? Math.round(attacks.reduce((sum, attack) => sum + attack.score, 0) / attacks.length)
+    : 0;
+
+  return [
+    { label: 'Eventos 24h', value: totalEvents24h.toLocaleString('es-ES'), trend: 'Wazuh', tone: 'info' },
+    { label: 'Alertas correladas', value: totalAlerts30d.toLocaleString('es-ES'), trend: `${loadedAlerts30d.toLocaleString('es-ES')} cargadas`, tone: 'info' },
+    { label: 'Anomalias IA', value: attacks.filter((attack) => attack.score >= 70).length.toString(), trend: `media ${meanScore}`, tone: 'ai' },
+    { label: 'Criticas', value: critical.toString(), trend: critical > 0 ? 'prioridad' : 'estable', tone: 'critical' },
+    { label: 'Agentes activos', value: activeAgents.toString(), trend: `${disconnectedAgents} off`, tone: activeAgents > 0 ? 'ok' : 'high' },
+    { label: 'AI Risk', value: meanScore.toString(), trend: meanScore >= 80 ? 'high' : 'guarded', tone: meanScore >= 80 ? 'high' : 'info' },
+  ];
+}
+
+function getRiskTone(max: number): RiskBucket['tone'] {
+  if (max > 87.5) return 'critical';
+  if (max > 75) return 'high';
+  if (max > 50) return 'medium';
+  return 'low';
+}
+
+function buildRiskDistribution(attacks: Attack[]): RiskBucket[] {
+  const ranges = Array.from({ length: 8 }, (_, index) => {
+    const min = index * 12.5;
+    const max = min + 12.5;
+    return { min, max };
+  });
+
+  return ranges.map(({ min, max }, index) => {
+    const inRange = attacks.filter((attack) => {
+      const isLastRange = index === ranges.length - 1;
+      return attack.score >= min && (isLastRange ? attack.score <= max : attack.score < max);
+    });
+    const scoreCounts = Array.from(
+      inRange.reduce((counts, attack) => {
+        counts.set(attack.score, (counts.get(attack.score) ?? 0) + 1);
+        return counts;
+      }, new Map<number, number>()),
+      ([score, count]) => ({ score, count })
+    ).sort((a, b) => a.score - b.score);
+
+    return {
+      label: `${min}-${max}`,
+      min,
+      max,
+      count: inRange.length,
+      tone: getRiskTone(max),
+      scores: scoreCounts,
+    };
+  });
+}
+
+function buildAgentHealth(manager: unknown, agents: Record<string, any>[], errors: ArgosLiveData['errors']) {
+  const activeAgents = agents.filter((agent) => agent.status === 'active').length;
+  const disconnectedAgents = agents.filter((agent) => agent.status !== 'active').length;
+
+  return [
+    {
+      name: 'Wazuh Manager',
+      status: errors.manager ? 'offline' : manager ? 'online' : 'learning',
+      metric: errors.manager ? 'sin conexion' : 'manager API',
+    },
+    {
+      name: 'Wazuh Agents',
+      status: errors.agents ? 'offline' : activeAgents > 0 ? 'online' : 'learning',
+      metric: `${activeAgents} activos · ${disconnectedAgents} desconectados`,
+    },
+    ...mockAgentHealth.slice(1),
+  ];
+}
+
+export function buildArgosLiveData(input: {
+  manager: unknown;
+  agents: unknown;
+  alerts: unknown;
+  events24h?: unknown;
+  errors: ArgosLiveData['errors'];
+}): ArgosLiveData {
+  const agentItems = normalizeAgents(input.agents);
+  const normalizedAttacks = normalizeWazuhAlerts(input.alerts, input.agents);
+  const hasLiveContext = Boolean(input.manager || input.agents || input.events24h);
+  const shouldUseMock = normalizedAttacks.length === 0 && (Boolean(input.errors.alerts) || !hasLiveContext);
+  const attacks = normalizedAttacks.length > 0 ? normalizedAttacks : shouldUseMock ? mockAttacks : [];
+  const totalAlerts30d = getTotalAlerts(input.alerts, normalizedAttacks.length);
+  const totalEvents24h = getTotalAlerts(input.events24h, normalizedAttacks.length);
+  const livePieces = [input.manager, input.agents, input.alerts].filter(Boolean).length;
+  const mode = livePieces === 3 ? 'live' : livePieces > 0 ? 'partial' : 'demo';
+
+  return {
+    ok: true,
+    updatedAt: new Date().toISOString(),
+    mode,
+    serviceStatus: {
+      manager: input.errors.manager ? 'offline' : input.manager ? 'online' : 'unknown',
+      agents: input.errors.agents ? 'offline' : input.agents ? 'online' : 'unknown',
+      indexer: input.errors.alerts ? 'offline' : input.alerts ? 'online' : 'unknown',
+      mode,
+    },
+    manager: input.manager,
+    agents: agentItems,
+    attacks,
+    kpis: shouldUseMock
+      ? mockKpis
+      : hasLiveContext
+      ? buildKpis(normalizedAttacks, agentItems, totalEvents24h, totalAlerts30d, normalizedAttacks.length)
+      : mockKpis,
+    agentHealth: buildAgentHealth(input.manager, agentItems, input.errors),
+    summary: {
+      events24h: totalEvents24h,
+      alertsLast30d: totalAlerts30d,
+      loadedAlertsLast30d: normalizedAttacks.length,
+    },
+    charts: {
+      attacksByType: hasLiveContext && attacks.length === 0 ? [] : toChartRows(countBy(attacks.map((attack) => attack.type)), mockAttackTypeStats),
+      severityDistribution: shouldUseMock ? mockSeverityStats : normalizedAttacks.length > 0 ? buildSeverityStats(attacks) : hasLiveContext ? buildEmptySeverityStats() : mockSeverityStats,
+      alertsTimeline: shouldUseMock ? mockTimelineStats : normalizedAttacks.length > 0 ? buildTimeline(attacks) : hasLiveContext ? buildEmptyTimeline() : mockTimelineStats,
+      topCountries: hasLiveContext && attacks.length === 0 ? [] : toChartRows(countBy(attacks.map((attack) => attack.source.country)), mockTopCountries, 5),
+      mitreTactics: hasLiveContext && attacks.length === 0 ? [] : toChartRows(countBy(attacks.map((attack) => attack.tactic)), mockMitreStats, 6),
+      riskDistribution: buildRiskDistribution(attacks),
+      correlationSources: [
+        { label: 'Wazuh + IA', value: attacks.filter((attack) => attack.sensorSources.includes('Wazuh')).length },
+        { label: 'Suricata + IA', value: attacks.filter((attack) => attack.sensorSources.includes('Suricata')).length },
+        { label: 'Zeek + IA', value: attacks.filter((attack) => attack.sensorSources.includes('Zeek')).length },
+        { label: 'All combined', value: attacks.filter((attack) => attack.sensorSources.length >= 4).length },
+      ],
+    },
+    errors: input.errors,
+  };
+}
