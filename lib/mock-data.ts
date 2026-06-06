@@ -1,9 +1,17 @@
 export type Severity = 'low' | 'medium' | 'high' | 'critical';
 export type SensorSource = 'Wazuh' | 'Suricata' | 'Zeek' | 'MCP' | 'AI Engine';
+export type HealthStatus = 'online' | 'offline' | 'learning' | 'planned';
+
+export type AgentHealthItem = {
+  name: string;
+  status: HealthStatus;
+  metric: string;
+};
 
 export type GeoPoint = {
   name: string;
   country: string;
+  city?: string;
   ip?: string;
   lat: number;
   lon: number;
@@ -218,10 +226,12 @@ export const mitreStats = [
   { label: 'Exfiltration', value: 5 },
 ];
 
-export const agentHealth = [
+export const agentHealth: AgentHealthItem[] = [
   { name: 'Wazuh Manager', status: 'online', metric: '18.421 eventos/min' },
-  { name: 'MCP Agents', status: 'online', metric: '12 agents · 6 tools' },
-  { name: 'Suricata IDS/IPS', status: 'online', metric: '1.204 flows/min' },
-  { name: 'Zeek Sensor', status: 'online', metric: '481 conn/min' },
-  { name: 'AI Risk Engine', status: 'learning', metric: 'score medio 78' },
+  { name: 'Wazuh Agents', status: 'online', metric: '37 activos - 0 desconectados' },
+  { name: 'Wazuh Indexer', status: 'online', metric: 'alertas cargadas' },
+  { name: 'GeoIP Enrichment', status: 'online', metric: 'origenes geolocalizados' },
+  { name: 'Risk Scoring', status: 'learning', metric: 'score medio 78' },
+  { name: 'MCP Agents', status: 'planned', metric: 'pendiente de integracion' },
+  { name: 'Flow Average', status: 'online', metric: 'flows/min media' },
 ];
