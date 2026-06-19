@@ -4,6 +4,7 @@ import { AttackGlobe } from '@/components/AttackGlobe';
 import { CommandSidebar, regions, type RegionFilter } from '@/components/CommandSidebar';
 import { CommandTopbar } from '@/components/CommandTopbar';
 import { MiniDashboard } from '@/components/MiniDashboard';
+import { McpChatWidget } from '@/components/McpChatWidget';
 import { ThreatFeed } from '@/components/ThreatFeed';
 import type { Attack } from '@/lib/mock-data';
 import { useArgosLiveData } from '@/lib/use-argos-live-data';
@@ -84,6 +85,7 @@ export function ArgosCommandCenter() {
       </section>
 
       <MiniDashboard kpis={data?.kpis} charts={data?.charts} mode={data?.mode} />
+      <McpChatWidget />
     </main>
   );
 }

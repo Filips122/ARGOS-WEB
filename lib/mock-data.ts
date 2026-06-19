@@ -33,6 +33,33 @@ export type Attack = {
   sensorSources: SensorSource[];
   timestamp: string;
   receivedAt?: string;
+  ai?: {
+    modelId: string;
+    modelVersion?: string;
+    score: number;
+    threshold: number;
+    prediction: 'attack' | 'benign';
+    confidence: number;
+    source: 'model' | 'fallback';
+    taxonomy?: {
+      modelId: string;
+      label: string;
+      confidence: number;
+    };
+    csrLanl?: {
+      supervisedScore: number;
+      entityAnomalyScore: number;
+      contextNoveltyScore: number;
+      classification: 'low_signal' | 'suspicious_entity' | 'high_risk_entity';
+      entity: string;
+      windowStart?: string;
+      windowEnd?: string;
+      model: string;
+      auxiliaryModel: string;
+      source: string;
+      warning?: string;
+    };
+  };
 };
 
 export const severityColors: Record<Severity, string> = {

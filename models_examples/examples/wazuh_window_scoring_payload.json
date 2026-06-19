@@ -1,0 +1,62 @@
+{
+  "hits": [
+    {
+      "_id": "example-attack-window",
+      "_source": {
+        "timestamp": "2026-06-06T17:45:00Z",
+        "rule": {
+          "id": "5710",
+          "level": 10,
+          "firedtimes": 1,
+          "description": "sshd: Attempt to login using a non-existent user",
+          "groups": ["authentication_failed", "sshd"],
+          "mitre": {
+            "tactic": ["Credential Access"]
+          }
+        },
+        "agent": {
+          "id": "000",
+          "name": "lab-host-01",
+          "ip": "10.0.0.5"
+        },
+        "decoder": {
+          "name": "sshd"
+        },
+        "predecoder": {
+          "program_name": "sshd"
+        },
+        "data": {
+          "srcip": "203.0.113.44",
+          "srcport": "51515",
+          "srcuser": "invalid"
+        },
+        "location": "/var/log/auth.log"
+      }
+    },
+    {
+      "_id": "example-benign-window",
+      "_source": {
+        "timestamp": "2026-06-06T17:47:20Z",
+        "rule": {
+          "id": "40704",
+          "level": 5,
+          "firedtimes": 1,
+          "description": "Systemd: Service exited due to a failure.",
+          "groups": ["local", "systemd"]
+        },
+        "agent": {
+          "id": "025",
+          "name": "Server-Web-Top-Secret",
+          "ip": "172.31.36.115"
+        },
+        "decoder": {
+          "name": "systemd"
+        },
+        "predecoder": {
+          "program_name": "systemd"
+        },
+        "location": "journald"
+      }
+    }
+  ]
+}

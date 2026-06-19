@@ -570,13 +570,14 @@ export function AttackGlobe({
 
         <div className="wazuhAlertRows" role="table">
           <div className="wazuhAlertRow wazuhAlertHead" role="row">
-            <span role="columnheader">Severidad</span>
+            <span role="columnheader">Severity</span>
             <span role="columnheader">Tipo</span>
             <span role="columnheader">Origen</span>
             <span role="columnheader">IP origen</span>
             <span role="columnheader">Destino</span>
             <span role="columnheader">Regla</span>
-            <span role="columnheader">AI</span>
+            <span role="columnheader">AI Score</span>
+            <span role="columnheader">Class</span>
           </div>
           {pipelineAlerts.map((attack) => (
             <button
@@ -594,7 +595,12 @@ export function AttackGlobe({
               <span role="cell">{attack.source.ip ?? 'unknown'}</span>
               <span role="cell">{attack.target.name}</span>
               <span role="cell">{attack.wazuhRule}</span>
-              <span role="cell">{attack.score}</span>
+              <span role="cell" title={attack.ai ? `${attack.ai.modelId} - ${attack.ai.prediction}` : 'Heuristica Wazuh'}>
+                {attack.score}
+              </span>
+              <span role="cell" className={`classificationCell ${attack.ai?.prediction ?? 'unknown'}`}>
+                {attack.ai?.prediction ?? 'unknown'}
+              </span>
             </button>
           ))}
         </div>
@@ -629,7 +635,9 @@ function AttackDetailCard({
       <div className="attackDetailMeta">
         <b>{attack.id}</b>
         <span>{attack.timestamp}</span>
-        <span>AI {attack.score}</span>
+        <span title={attack.ai ? `${attack.ai.modelId} - ${attack.ai.prediction}` : undefined}>
+          AI {attack.score}
+        </span>
       </div>
       <dl className="attackDetailGrid">
         <div><dt>Origen</dt><dd>{getOriginLabel(attack)}</dd></div>
@@ -640,6 +648,14 @@ function AttackDetailCard({
         <div><dt>Zona</dt><dd>{attack.zone}</dd></div>
         <div><dt>Tactica</dt><dd>{attack.tactic}</dd></div>
         <div><dt>Wazuh rule</dt><dd>{attack.wazuhRule}</dd></div>
+        {attack.ai && <div><dt>Modelo IA</dt><dd>{attack.ai.modelId}</dd></div>}
+        {attack.ai && <div><dt>Prediccion IA</dt><dd>{attack.ai.prediction} ({Math.round(attack.ai.confidence * 100)}%)</dd></div>}
+        {attack.ai?.taxonomy && <div><dt>Prediccion taxonomica IA</dt><dd>{attack.ai.taxonomy.label} ({Math.round(attack.ai.taxonomy.confidence * 100)}%)</dd></div>}
+        {attack.ai?.csrLanl && <div><dt>CSR-LANL entidad</dt><dd>{attack.ai.csrLanl.entity}</dd></div>}
+        {attack.ai?.csrLanl && <div><dt>CSR-LANL clasificacion</dt><dd>{attack.ai.csrLanl.classification.replaceAll('_', ' ')}</dd></div>}
+        {attack.ai?.csrLanl && <div><dt>CSR-LANL score</dt><dd>{Math.round(attack.ai.csrLanl.supervisedScore * 100)}%</dd></div>}
+        {attack.ai?.csrLanl && <div><dt>Anomalia entidad</dt><dd>{attack.ai.csrLanl.entityAnomalyScore.toFixed(3)}</dd></div>}
+        {attack.ai?.csrLanl && <div><dt>Novedad contexto</dt><dd>{Math.round(attack.ai.csrLanl.contextNoveltyScore * 100)}%</dd></div>}
         <div><dt>Suricata SID</dt><dd>{attack.suricataSid}</dd></div>
         <div><dt>MCP tool</dt><dd>{attack.mcpTool}</dd></div>
         <div><dt>Sensores</dt><dd>{attack.sensorSources.join(' / ')}</dd></div>

@@ -1,6 +1,72 @@
-.env.local
-.env*.local
-node_modules
-.next
+# Environment
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+.venv/
+venv/
+
+# Next.js / build output
+.next/
+out/
+dist/
+build/
+.turbo/
+.vercel/
+*.tsbuildinfo
+
+# Local dev server logs
 .next-dev*
 .next-start*
+*.log
+
+# Tests / coverage / caches
+coverage/
+test-results/
+playwright-report/
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+__pycache__/
+__pycache__*
+*.py[cod]
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+
+# LAB_ALERTS_REFACTOR training data and generated outputs
+LAB_ALERTS_REFACTOR/prepared_dataset/
+LAB_ALERTS_REFACTOR/production_context/
+LAB_ALERTS_REFACTOR/raw_source/
+LAB_ALERTS_REFACTOR/artifacts/
+LAB_ALERTS_REFACTOR/_tmp*/
+
+# ARGOS runtime keeps only the packaged LAB refactor models currently loaded by models_examples/score_wazuh_alerts.py.
+# Legacy model packages kept for comparison/future work are not loaded by the web.
+models_examples/model_store/hgb_lab_alerts_binary_date_20260520_181715/
+models_examples/model_store/hgb_cowrie_multiclass_date_20260520_182459/
+
+# Future model archives/tools are not loaded by the current web runtime.
+# Keep models_future/csr_lanl_identity/ because lib/ai-scoring.ts calls its scorer.
+models_future/examples/
+models_future/model_store/
+models_future/policies/
+models_future/siem_ingestion/
+models_future/threshold_runs/
+models_future/tools/
+models_future/active_model_registry.json
+
+# ARGOS-CSR-LANL runtime needs schemas/model_contract.json and selected model artifacts.
+# Ignore docs and batch-training helpers that the web does not execute.
+ARGOS-CSR-LANL/README.md
+ARGOS-CSR-LANL/model_manifest.json
+ARGOS-CSR-LANL/docs/
+ARGOS-CSR-LANL/scripts/
+ARGOS-CSR-LANL/models/*/results.json
+
+# Keep these tracked when needed: LAB_ALERTS_REFACTOR/source_pipeline, docs, scripts and strategy notes.

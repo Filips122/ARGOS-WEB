@@ -1,0 +1,50 @@
+{
+  "package": "ARGOS-CSR-LANL",
+  "dataset": "CSR-LANL",
+  "profile_name": "redteam_identity_streaming",
+  "window_seconds": 3600,
+  "entity_key": "entity",
+  "feature_count": 209,
+  "primary_model": {
+    "name": "csr_lanl_identity_hgb",
+    "type": "supervised_binary",
+    "framework": "scikit-learn",
+    "artifact_dir": "models/hgb_candidate",
+    "selected_fold": 1,
+    "selection_reason": "Best validation PR-AUC/F1 among available folds, with stable test behavior.",
+    "score_field": "supervised_score",
+    "score_direction": "higher_is_more_suspicious",
+    "validation_threshold_best_f1": 0.9892924292237013,
+    "test_threshold_best_f1": 0.9889348115689075
+  },
+  "auxiliary_model": {
+    "name": "csr_lanl_identity_isoforest",
+    "type": "entity_anomaly",
+    "framework": "scikit-learn",
+    "artifact_dir": "models/isoforest_aux",
+    "selected_fold": 1,
+    "score_field": "entity_anomaly_score",
+    "score_direction": "higher_is_more_anomalous",
+    "role": "enrichment_and_explanation_not_primary_decision"
+  },
+  "argos_policy": {
+    "primary_score": "supervised_score",
+    "secondary_score": "entity_anomaly_score",
+    "context_score": "context_novelty_score",
+    "recommended_use": "Prioritization and enrichment. Do not create automatic incidents without SIEM correlation.",
+    "classifications": {
+      "low_signal": "supervised_score < 0.95",
+      "suspicious_entity": "0.95 <= supervised_score < 0.9892924292237013",
+      "high_risk_entity": "supervised_score >= 0.9892924292237013"
+    }
+  },
+  "required_input": {
+    "format": "CSV, JSONL, or Parquet rows already transformed to the CSR-LANL identity feature contract",
+    "notes": [
+      "This package scores feature windows. It does not parse raw Wazuh events directly.",
+      "ARGOS must provide the same 209 feature columns used during training.",
+      "Missing required features are treated as schema errors."
+    ]
+  }
+}
+

@@ -416,15 +416,15 @@ button, input { font: inherit; }
 .wazuhAlertRows {
   display: grid;
   min-width: 0;
-  overflow-x: auto;
+  overflow-x: hidden;
 }
 .wazuhAlertRow {
   display: grid;
-  grid-template-columns: 104px minmax(150px, 1.25fr) minmax(130px, 1fr) minmax(112px, 0.9fr) minmax(120px, 1fr) 78px 52px;
-  gap: 10px;
+  grid-template-columns: 68px minmax(118px, 1.2fr) minmax(58px, 0.55fr) minmax(84px, 0.75fr) minmax(100px, 0.85fr) 58px 54px 54px;
+  gap: 6px;
   align-items: center;
-  min-width: 940px;
-  padding: 9px 10px;
+  min-width: 0;
+  padding: 9px 8px;
   color: var(--text);
   text-align: left;
   border: 0;
@@ -444,14 +444,21 @@ button.wazuhAlertRow:hover {
   white-space: nowrap;
   font-size: 0.76rem;
 }
+.classificationCell {
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.classificationCell.attack { color: var(--rose); }
+.classificationCell.benign { color: var(--cyan); }
+.classificationCell.unknown { color: var(--muted); }
 .wazuhAlertHead {
   color: var(--muted);
   background: rgba(56, 248, 212, 0.045);
 }
 .wazuhAlertHead span {
-  font-size: 0.62rem;
+  font-size: 0.58rem;
   font-weight: 800;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
@@ -641,6 +648,140 @@ button.wazuhAlertRow:hover {
   font-size: 0.76rem;
 }
 .riskScoreList b { color: var(--cyan); font-size: 0.82rem; }
+
+.mcpChatDock {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 40;
+  display: grid;
+  justify-items: end;
+  gap: 10px;
+  pointer-events: none;
+}
+.mcpChatButton,
+.mcpChatPanel {
+  pointer-events: auto;
+}
+.mcpChatButton {
+  cursor: pointer;
+  width: 58px;
+  height: 58px;
+  border: 1px solid rgba(56, 248, 212, 0.55);
+  border-radius: 50%;
+  color: #06141f;
+  background: var(--cyan);
+  font-size: 0.8rem;
+  font-weight: 950;
+  letter-spacing: 0.08em;
+  box-shadow: 0 0 28px rgba(56, 248, 212, 0.32), 0 18px 55px rgba(0, 0, 0, 0.42);
+}
+.mcpChatButton:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 0 34px rgba(56, 248, 212, 0.5), 0 20px 64px rgba(0, 0, 0, 0.46);
+}
+.mcpChatPanel {
+  width: min(390px, calc(100vw - 28px));
+  max-height: min(620px, calc(100vh - 104px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  border: 1px solid rgba(56, 248, 212, 0.28);
+  background: rgba(2, 6, 23, 0.94);
+  box-shadow: 0 24px 90px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(18px);
+}
+.mcpChatHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px;
+  border-bottom: 1px solid rgba(126, 168, 184, 0.16);
+}
+.mcpChatHeader span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.58rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+}
+.mcpChatHeader b {
+  color: var(--cyan);
+  font-size: 0.88rem;
+}
+.mcpChatHeader button {
+  cursor: pointer;
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(126, 168, 184, 0.24);
+  border-radius: 50%;
+  color: var(--text);
+  background: rgba(2, 6, 23, 0.7);
+}
+.mcpChatMessages {
+  display: grid;
+  align-content: start;
+  gap: 9px;
+  min-height: 260px;
+  max-height: 440px;
+  overflow: auto;
+  padding: 12px;
+}
+.mcpChatMessage {
+  max-width: 92%;
+  padding: 9px 10px;
+  border: 1px solid rgba(126, 168, 184, 0.14);
+  background: rgba(126, 168, 184, 0.08);
+}
+.mcpChatMessage.user {
+  justify-self: end;
+  border-color: rgba(56, 248, 212, 0.28);
+  background: rgba(56, 248, 212, 0.12);
+}
+.mcpChatMessage.assistant {
+  justify-self: start;
+}
+.mcpChatMessage p {
+  margin: 0;
+  color: #d9f6fb;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  white-space: pre-wrap;
+}
+.mcpChatMessage p + p {
+  margin-top: 4px;
+}
+.mcpChatForm {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 70px;
+  gap: 8px;
+  padding: 12px;
+  border-top: 1px solid rgba(126, 168, 184, 0.16);
+}
+.mcpChatForm input {
+  min-width: 0;
+  border: 1px solid rgba(126, 168, 184, 0.22);
+  color: var(--text);
+  background: rgba(2, 6, 23, 0.7);
+  padding: 9px 10px;
+  font-size: 0.78rem;
+  outline: none;
+}
+.mcpChatForm input:focus {
+  border-color: rgba(56, 248, 212, 0.62);
+}
+.mcpChatForm button {
+  cursor: pointer;
+  border: 1px solid rgba(56, 248, 212, 0.36);
+  color: #07141f;
+  background: var(--cyan);
+  font-weight: 900;
+  font-size: 0.72rem;
+}
+.mcpChatForm button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
 
 @media (max-width: 1320px) {
   .commandGrid { grid-template-columns: 270px 1fr; }

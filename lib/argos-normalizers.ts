@@ -248,8 +248,16 @@ export function normalizeWazuhAlerts(alerts: unknown, agents: unknown): Attack[]
     const source = hit._source ?? {};
     const level = readNumber(source.rule?.level);
     const severity = mapWazuhLevelToSeverity(level);
+    const ai = source.ml?.argos;
+    const aiRiskScore = readNumber(ai?.risk_score);
+    const isLocalSimulation = source.argos?.localSimulation === true || source.labels?.argos_local_simulation === 'true';
+    const simulationKind = pickString(source.argos?.simulationKind, source.labels?.argos_simulation_kind);
+    const simulationScenario = pickString(source.argos?.scenario, source.labels?.argos_simulation_scenario);
     const description = pickString(source.rule?.description, source.title, source.full_log) ?? 'Wazuh alert';
-    const attackType = inferAttackType(description);
+    const simulationLabel = simulationKind === 'benign' ? 'benigna' : simulationKind ?? 'local';
+    const attackType = isLocalSimulation
+      ? `Simulacion ${simulationLabel}${simulationScenario ? ` - ${simulationScenario}` : ''}`
+      : inferAttackType(description);
     const sourceIp = pickString(
       source.data?.srcip,
       source.data?.src_ip,
@@ -279,14 +287,45 @@ export function normalizeWazuhAlerts(alerts: unknown, agents: unknown): Attack[]
       type: attackType,
       tactic: inferMitreTactic(source, attackType),
       severity,
-      score: estimateAiScoreFromWazuhLevel(level),
+      score: aiRiskScore ?? estimateAiScoreFromWazuhLevel(level),
       agent: agentName,
       wazuhRule: pickString(source.rule?.id) ?? 'N/A',
       suricataSid: pickString(source.rule?.sid, source.data?.sid) ?? 'N/A',
-      mcpTool: attackType.toLowerCase().includes('auth') || attackType.toLowerCase().includes('brute') ? 'auth.window' : 'wazuh.triage',
+      mcpTool: isLocalSimulation ? 'argos.local-simulator' : attackType.toLowerCase().includes('auth') || attackType.toLowerCase().includes('brute') ? 'auth.window' : 'wazuh.triage',
       sensorSources: ['Wazuh', 'AI Engine'],
       timestamp: formatRelativeTimestamp(timestamp),
       receivedAt: timestamp,
+      ai: ai && typeof ai === 'object' ? {
+        modelId: pickString(ai.model_id) ?? 'argos-ai',
+        modelVersion: pickString(ai.model_version),
+        score: readNumber(ai.score) ?? ((aiRiskScore ?? estimateAiScoreFromWazuhLevel(level)) / 100),
+        threshold: readNumber(ai.threshold) ?? 0,
+        prediction: pickString(ai.prediction) === 'benign' ? 'benign' : 'attack',
+        confidence: readNumber(ai.confidence) ?? 0,
+        source: pickString(ai.source) === 'fallback' ? 'fallback' : 'model',
+        taxonomy: ai.taxonomy && typeof ai.taxonomy === 'object' ? {
+          modelId: pickString(ai.taxonomy.model_id) ?? 'cowrie-taxonomy',
+          label: pickString(ai.taxonomy.label) ?? 'unknown',
+          confidence: readNumber(ai.taxonomy.confidence) ?? 0,
+        } : undefined,
+        csrLanl: ai.csr_lanl && typeof ai.csr_lanl === 'object' ? {
+          supervisedScore: readNumber(ai.csr_lanl.supervised_score) ?? 0,
+          entityAnomalyScore: readNumber(ai.csr_lanl.entity_anomaly_score) ?? 0,
+          contextNoveltyScore: readNumber(ai.csr_lanl.context_novelty_score) ?? 0,
+          classification: pickString(ai.csr_lanl.classification) === 'high_risk_entity'
+            ? 'high_risk_entity'
+            : pickString(ai.csr_lanl.classification) === 'suspicious_entity'
+              ? 'suspicious_entity'
+              : 'low_signal',
+          entity: pickString(ai.csr_lanl.entity) ?? 'unknown',
+          windowStart: pickString(ai.csr_lanl.window_start),
+          windowEnd: pickString(ai.csr_lanl.window_end),
+          model: pickString(ai.csr_lanl.model) ?? 'csr_lanl_identity_hgb',
+          auxiliaryModel: pickString(ai.csr_lanl.auxiliary_model) ?? 'csr_lanl_identity_isoforest',
+          source: pickString(ai.csr_lanl.source) ?? 'wazuh_sparse_adapter',
+          warning: pickString(ai.csr_lanl.warning),
+        } : undefined,
+      } : undefined,
     };
   });
 }
@@ -475,7 +514,7 @@ function buildLiveAgentHealth(
     {
       name: 'Risk Scoring',
       status: attacks.length > 0 ? 'online' : 'learning',
-      metric: `score medio ${meanScore}`,
+      metric: attacks.some((attack) => attack.ai?.source === 'model') ? `modelo IA activo - media ${meanScore}` : `score medio ${meanScore}`,
     },
     {
       name: 'MCP Agents',

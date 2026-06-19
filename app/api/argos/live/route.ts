@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
+import { enrichWazuhAlertsWithAi } from '@/lib/ai-scoring';
 import { buildArgosLiveData } from '@/lib/argos-normalizers';
+import { injectLocalBenignSimulation } from '@/lib/local-alert-simulator';
 import { wazuhApiGet } from '@/lib/wazuh';
 import { getRecentWazuhAlerts, getWazuhAlertsCount } from '@/lib/wazuh-indexer';
 
@@ -31,10 +33,14 @@ export async function GET() {
     getWazuhAlertsCount('now-24h'),
   ]);
 
+  const rawAlerts = alerts.status === 'fulfilled' ? alerts.value.data : null;
+  const localAlerts = injectLocalBenignSimulation(rawAlerts);
+  const scoredAlerts = await enrichWazuhAlertsWithAi(localAlerts);
+
   const liveData = buildArgosLiveData({
     manager: manager.status === 'fulfilled' ? manager.value : null,
     agents: agents.status === 'fulfilled' ? agents.value : null,
-    alerts: alerts.status === 'fulfilled' ? alerts.value.data : null,
+    alerts: scoredAlerts,
     events24h: events24h.status === 'fulfilled' ? events24h.value : null,
     errors: {
       manager: manager.status === 'rejected' ? getReason(manager.reason) : null,

@@ -1,0 +1,9 @@
+                  precision    recall  f1-score   support
+
+CredentialAccess     0.9993    0.9993    0.9993      1463
+      OtherAlert     1.0000    0.9688    0.9841        32
+  ServiceFailure     0.9989    1.0000    0.9994       904
+
+        accuracy                         0.9992      2399
+       macro avg     0.9994    0.9894    0.9943      2399
+    weighted avg     0.9992    0.9992    0.9992      2399

@@ -1,0 +1,47 @@
+{
+  "agent_id": {
+    "Unknown": 0,
+    "000": 1,
+    "003": 2,
+    "011": 3,
+    "017": 4,
+    "018": 5,
+    "022": 6,
+    "023": 7,
+    "025": 8,
+    "026": 9
+  },
+  "decoder": {
+    "Unknown": 0,
+    "docker": 1,
+    "dpkg-decoder": 2,
+    "json": 3,
+    "pam": 4,
+    "sshd": 5,
+    "syscheck_registry_value_deleted": 6,
+    "syscheck_registry_value_modified": 7,
+    "systemd": 8,
+    "web-accesslog": 9,
+    "windows_eventchannel": 10
+  },
+  "program": {
+    "Unknown": 0,
+    "(sd-pam)": 1,
+    "dockerd": 2,
+    "sshd": 3,
+    "su": 4,
+    "systemd": 5
+  },
+  "location": {
+    "Unknown": 0,
+    "/var/lib/docker/containers/6f7ec43a820d0c0be4e6ce3d35bccc2b4837a6897d53b5ad9adcb7b0e0981826/6f7ec43a820d0c0be4e6ce3d35bccc2b4837a6897d53b5ad9adcb7b0e0981826-json.log": 1,
+    "/var/lib/docker/containers/c59ce1e2f101161db265fcaa6e8213927f6731216f086efdfa5a37edb79f5f8b/c59ce1e2f101161db265fcaa6e8213927f6731216f086efdfa5a37edb79f5f8b-json.log": 2,
+    "/var/log/apache2/sorollabiblioteca_access.log": 3,
+    "/var/log/auth.log": 4,
+    "/var/log/dpkg.log": 5,
+    "/var/log/syslog": 6,
+    "EventChannel": 7,
+    "journald": 8,
+    "syscheck": 9
+  }
+}

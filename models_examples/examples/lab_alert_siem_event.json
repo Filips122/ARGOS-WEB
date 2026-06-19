@@ -1,0 +1,43 @@
+{
+  "@timestamp": "2026-06-02T12:41:23Z",
+  "event": {
+    "kind": "alert",
+    "category": [
+      "intrusion_detection"
+    ],
+    "type": [
+      "indicator"
+    ],
+    "module": "production_ml_pipeline",
+    "dataset": "LAB-ALERTS"
+  },
+  "ml": {
+    "model_id": "hgb_lab_alerts_binary_date_20260520_181715",
+    "model_version": "20260520_181715",
+    "model_type": "hgb_binary",
+    "domain": "siem_lab_alerts",
+    "score": 0.93,
+    "threshold": 0.07434343434343434,
+    "prediction": "attack",
+    "risk_score": 100,
+    "severity": "critical"
+  },
+  "rule": {
+    "name": "ML detection - siem_lab_alerts",
+    "category": "machine_learning",
+    "description": "Production pipeline model decision exported for SIEM correlation."
+  },
+  "labels": {
+    "production_status": "production_candidate",
+    "pipeline": "binary",
+    "split_mode": "date"
+  },
+  "related": {
+    "hosts": [
+      "lab-host-01"
+    ]
+  },
+  "entity": {
+    "id": "lab-host-01"
+  }
+}

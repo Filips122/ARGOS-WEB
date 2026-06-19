@@ -1,0 +1,20 @@
+{
+  "feature_names_in": [
+    "alert_count",
+    "unique_rule_count",
+    "unique_src_ip_count",
+    "unique_src_user_count",
+    "unique_dst_user_count",
+    "unique_decoder_count",
+    "unique_program_count",
+    "unique_location_count",
+    "src_ip_present_count",
+    "src_port_present_count",
+    "has_new_src_ip",
+    "has_new_rule_id",
+    "event_hour",
+    "event_minute",
+    "day_of_week",
+    "agent_id_code"
+  ]
+}
