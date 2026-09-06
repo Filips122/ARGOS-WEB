@@ -780,6 +780,39 @@ button.wazuhAlertRow:hover {
 .mcpChatMessage p + p {
   margin-top: 4px;
 }
+/* Traza de herramientas MCP invocadas para responder: hace auditable la
+   respuesta del modelo, que de otro modo seria una caja negra. */
+.mcpChatTrace {
+  margin: 0 0 7px;
+  padding: 0 0 6px;
+  list-style: none;
+  border-bottom: 1px dashed rgba(126, 168, 184, 0.22);
+  display: grid;
+  gap: 2px;
+}
+.mcpChatTrace li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 5px;
+  font-size: 0.66rem;
+  color: rgba(126, 168, 184, 0.85);
+}
+.mcpChatTrace code {
+  color: #38f8d4;
+  font-size: 0.66rem;
+}
+.mcpChatTrace em {
+  font-style: normal;
+  color: rgba(217, 246, 251, 0.6);
+}
+.mcpChatTrace li span {
+  margin-left: auto;
+  color: rgba(126, 168, 184, 0.6);
+}
+.mcpChatTrace li.err code {
+  color: #ff8f8f;
+}
 .mcpChatForm {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 70px;

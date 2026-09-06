@@ -1,22 +1,172 @@
+/**
+ * Chat del panel ARGOS.
+ *
+ * Dos motores, el mismo endpoint:
+ *
+ *  - "claude": si existe ANTHROPIC_API_KEY, la peticion se resuelve con un
+ *    bucle de uso de herramientas contra el servidor MCP de ARGOS. La web hace
+ *    de HOST MCP (ver lib/mcp-host.ts): las siete herramientas que consume
+ *    Claude Desktop son las mismas que se le ofrecen aqui al modelo.
+ *  - "keywords": sin clave, responde el comparador de palabras clave de
+ *    siempre. No se rompe la pantalla, solo se degrada la respuesta.
+ *
+ * Es de SOLO LECTURA. Ninguna herramienta escribe en Wazuh ni bloquea nada.
+ */
+
+import Anthropic from '@anthropic-ai/sdk';
 import { NextResponse } from 'next/server';
 import { enrichWazuhAlertsWithAi } from '@/lib/ai-scoring';
 import { buildArgosLiveData, type ArgosLiveData } from '@/lib/argos-normalizers';
 import { injectLocalBenignSimulation } from '@/lib/local-alert-simulator';
+import { callMcpTool, getMcpSession } from '@/lib/mcp-host';
 import { wazuhApiGet } from '@/lib/wazuh';
 import { getRecentWazuhAlerts, getWazuhAlertsCount } from '@/lib/wazuh-indexer';
 import type { Attack, Severity } from '@/lib/mock-data';
 
 export const runtime = 'nodejs';
+export const maxDuration = 300;
+
+type ChatTurn = { role: 'user' | 'assistant'; content: string };
 
 type ChatRequest = {
   message?: string;
+  history?: ChatTurn[];
 };
 
 const severities: Severity[] = ['critical', 'high', 'medium', 'low'];
 
+/** Tope de iteraciones del bucle: acota coste y evita bucles de herramientas. */
+const MAX_TURNS = 6;
+/** Turnos previos que se reenvian para que el modelo entienda "y de esa IP?". */
+const MAX_HISTORY = 8;
+
 function getReason(error: unknown) {
   return error instanceof Error ? error.message : 'Unknown error';
 }
+
+// ---------------------------------------------------------------------------
+// Motor 1: Claude sobre las herramientas MCP
+// ---------------------------------------------------------------------------
+
+/**
+ * Las advertencias metodologicas van aqui y no solo en las descripciones de las
+ * herramientas porque son propiedades del trabajo, no de una llamada concreta:
+ * si el modelo las olvida, el panel miente. Cada una esta medida y documentada
+ * en METRICAS.md.
+ */
+const SYSTEM_PROMPT = [
+  'Eres el analista de guardia de ARGOS-SOC IA, un panel de operaciones de seguridad montado sobre Wazuh.',
+  'Respondes en espanol, en tono profesional y directo, sin florituras. Prefiere frases cortas y cifras concretas.',
+  '',
+  'COMO TRABAJAS',
+  '- Nunca respondas de memoria: consulta las herramientas antes de dar cifras. Todo dato numerico debe salir de una llamada de esta conversacion.',
+  '- Si no sabes si los datos son fiables, empieza por estado_plataforma.',
+  '- Si una herramienta no devuelve lo que hace falta, dilo. No rellenes huecos con suposiciones ni inventes IPs, reglas o CVEs.',
+  '- Encadena varias herramientas cuando la pregunta lo pida (por ejemplo: buscar_alertas para localizar una IP y luego riesgo_de_ip sobre ella).',
+  '- Cierra con una recomendacion accionable solo si los datos la sostienen.',
+  '',
+  'LIMITES QUE NO PUEDES OMITIR (estan medidos, no son cautelas de cortesia)',
+  '1. Eres de SOLO LECTURA. No bloqueas IPs, no escribes en Wazuh, no lanzas acciones activas. simular_bloqueo es una reproduccion en seco: si alguien pide bloquear, explica que la decision es humana y que el bloqueo automatico no esta aprobado.',
+  '2. El "AI Score" de la tabla es el score de una VENTANA de un minuto de un agente, no de la alerta concreta ni de la IP. No lo presentes como la probabilidad de que esa alerta sea un ataque. Para valorar una IP usa riesgo_de_ip.',
+  '3. El dominio de validez de los modelos son atacantes RUIDOSOS: fuerza bruta, escaneo y spraying de credenciales. No afirmes que ARGOS detecta APTs, atacantes sigilosos ni amenazas avanzadas, y corrige al usuario si lo da por hecho.',
+  '4. El modelo se valido en este laboratorio; se midio que NO transfiere a maquinas nuevas. Cualquier extrapolacion a otra red es una hipotesis, no un resultado.',
+  '5. La severidad CRITICAL del panel viene casi toda de hallazgos de vulnerabilidades del escaner (Trivy), no de ataques en curso; mientras tanto la fuerza bruta real vive en LOW. No equipares severidad alta con ataque activo.',
+  '6. El bloque CSR-LANL es una capa experimental fuera de su dominio: su adaptador rellena con ceros las familias de datos que Wazuh no produce. Si aparece, adviertelo y no lo uses como evidencia.',
+  '7. Los porcentajes agregados del simulacro suelen venir de unas pocas IPs muy ruidosas. Si citas uno, cita tambien el desglose de concentracion que devuelve la herramienta.',
+].join('\n');
+
+type ToolTrace = { name: string; args: Record<string, unknown>; ms: number; chars: number; isError: boolean };
+
+async function answerWithClaude(
+  message: string,
+  history: ChatTurn[]
+): Promise<{ answer: string; toolCalls: ToolTrace[]; turns: number; usage: { input: number; output: number } }> {
+  const { tools } = await getMcpSession();
+  const client = new Anthropic();
+
+  // La API exige que el primer turno sea del usuario: se descarta el saludo
+  // inicial del asistente y cualquier turno vacio del historial del navegador.
+  const prior = history
+    .filter((turn) => (turn.role === 'user' || turn.role === 'assistant') && turn.content?.trim())
+    .slice(-MAX_HISTORY);
+  while (prior.length > 0 && prior[0].role === 'assistant') prior.shift();
+
+  const messages: Anthropic.MessageParam[] = [
+    ...prior.map((turn) => ({ role: turn.role, content: turn.content })),
+    { role: 'user' as const, content: message },
+  ];
+
+  const toolCalls: ToolTrace[] = [];
+  const usage = { input: 0, output: 0 };
+  let turns = 0;
+
+  while (turns < MAX_TURNS) {
+    turns += 1;
+
+    const stream = client.messages.stream({
+      model: 'claude-opus-5',
+      max_tokens: 8000,
+      thinking: { type: 'adaptive' },
+      system: SYSTEM_PROMPT,
+      tools: tools as Anthropic.Tool[],
+      messages,
+    });
+    const response = await stream.finalMessage();
+
+    usage.input += response.usage.input_tokens;
+    usage.output += response.usage.output_tokens;
+
+    const toolUses = response.content.filter(
+      (block): block is Anthropic.ToolUseBlock => block.type === 'tool_use'
+    );
+
+    if (response.stop_reason !== 'tool_use' || toolUses.length === 0) {
+      const answer = response.content
+        .filter((block): block is Anthropic.TextBlock => block.type === 'text')
+        .map((block) => block.text)
+        .join('\n')
+        .trim();
+      return { answer, toolCalls, turns, usage };
+    }
+
+    messages.push({ role: 'assistant', content: response.content });
+
+    const results: Anthropic.ToolResultBlockParam[] = [];
+    for (const use of toolUses) {
+      const started = Date.now();
+      const args = (use.input ?? {}) as Record<string, unknown>;
+      const outcome = await callMcpTool(use.name, args);
+      toolCalls.push({
+        name: use.name,
+        args,
+        ms: Date.now() - started,
+        chars: outcome.text.length,
+        isError: outcome.isError,
+      });
+      results.push({
+        type: 'tool_result',
+        tool_use_id: use.id,
+        content: outcome.text,
+        is_error: outcome.isError,
+      });
+    }
+
+    messages.push({ role: 'user', content: results });
+  }
+
+  return {
+    answer:
+      'He alcanzado el limite de consultas encadenadas sin cerrar la respuesta. ' +
+      'Concreta un poco mas la pregunta (por ejemplo, una IP o una severidad).',
+    toolCalls,
+    turns,
+    usage,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Motor 2: comparador de palabras clave (sin clave de API)
+// ---------------------------------------------------------------------------
 
 async function getMonthlyAlerts() {
   try {
@@ -61,7 +211,7 @@ function normalizeMessage(message: string) {
   return message
     .toLowerCase()
     .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[̀-ͯ]/g, '')
     .trim();
 }
 
@@ -154,26 +304,70 @@ function answerQuestion(message: string, data: ArgosLiveData) {
   ].join('\n');
 }
 
+async function answerWithKeywords(message: string) {
+  const data = await getArgosLiveData();
+  return {
+    answer: answerQuestion(message, data),
+    mode: data.mode,
+    totalAlerts: data.attacks.length,
+    errors: data.errors,
+  };
+}
+
+// ---------------------------------------------------------------------------
+
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as ChatRequest;
     const message = body.message?.trim();
+    const history = Array.isArray(body.history) ? body.history : [];
 
     if (!message) {
       return NextResponse.json({ ok: false, error: 'Message is required' }, { status: 400 });
     }
 
-    const data = await getArgosLiveData();
-    const answer = answerQuestion(message, data);
+    if (process.env.ANTHROPIC_API_KEY) {
+      try {
+        const result = await answerWithClaude(message, history);
+        return NextResponse.json({
+          ok: true,
+          engine: 'claude',
+          model: 'claude-opus-5',
+          answer: result.answer,
+          toolCalls: result.toolCalls,
+          turns: result.turns,
+          usage: result.usage,
+        });
+      } catch (error) {
+        // Clave invalida, sin saldo, MCP caido: se responde igualmente con el
+        // motor determinista en lugar de dejar la pantalla sin respuesta.
+        const fallback = await answerWithKeywords(message);
+        return NextResponse.json({
+          ok: true,
+          engine: 'keywords',
+          degraded: getReason(error),
+          ...fallback,
+        });
+      }
+    }
 
-    return NextResponse.json({
-      ok: true,
-      answer,
-      mode: data.mode,
-      totalAlerts: data.attacks.length,
-      errors: data.errors,
-    });
+    const fallback = await answerWithKeywords(message);
+    return NextResponse.json({ ok: true, engine: 'keywords', ...fallback });
   } catch (error) {
     return NextResponse.json({ ok: false, error: getReason(error) }, { status: 500 });
+  }
+}
+
+/** Sonda de estado para que el widget sepa que motor va a contestar. */
+export async function GET() {
+  const hasKey = Boolean(process.env.ANTHROPIC_API_KEY);
+  if (!hasKey) {
+    return NextResponse.json({ ok: true, engine: 'keywords', tools: 0, reason: 'Falta ANTHROPIC_API_KEY' });
+  }
+  try {
+    const { tools } = await getMcpSession();
+    return NextResponse.json({ ok: true, engine: 'claude', model: 'claude-opus-5', tools: tools.length });
+  } catch (error) {
+    return NextResponse.json({ ok: true, engine: 'keywords', tools: 0, reason: getReason(error) });
   }
 }

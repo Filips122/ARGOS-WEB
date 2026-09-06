@@ -426,18 +426,63 @@ el panel no permite comprobar que el sistema distingue algo. Se identifica con
 | `GET /api/argos/live` | Alimenta el panel completo. |
 | `GET /api/argos/simulation` | Ejecuta el simulacro. `minutes`, `limit`, `source`. |
 | `GET /api/argos/dataset` | Exporta alertas en JSONL para análisis. `format=manifest` da solo el balance de clases. |
-| `POST /api/argos/mcp-chat` | Consulta en lenguaje natural. **Ver limitación abajo.** |
+| `POST /api/argos/mcp-chat` | Consulta en lenguaje natural sobre las herramientas MCP. |
+| `GET /api/argos/mcp-chat` | Sonda: qué motor va a responder y cuántas herramientas hay. |
 | `GET /api/wazuh/*` | Acceso directo a agentes, manager y alertas. |
 
 ### El asistente conversacional
 
-**No usa un modelo de lenguaje.** Es un comparador de palabras clave: normaliza
-el texto, busca términos como «severidad» o «reciente», extrae un número con
-una expresión regular y rellena una plantilla con datos reales.
+Dos motores tras el mismo endpoint. Cuál responde depende de si hay credencial
+configurada, y la respuesta lo declara en el campo `engine`.
 
-Se llamaba «MCP» en la interfaz, lo que sugería una integración inexistente.
-Renombrado a **CONSULTA**, y el mensaje de bienvenida ahora dice explícitamente
-que reconoce palabras clave y no es un modelo de lenguaje.
+#### Motor `claude` — la web como host MCP
+
+Si existe `ANTHROPIC_API_KEY`, la aplicación web actúa como **host del Model
+Context Protocol**: levanta `deploy/argos_mcp/server.ts` como proceso hijo,
+habla con él por stdio y ofrece sus siete herramientas al modelo, que decide
+cuáles llamar y en qué orden.
+
+```
+navegador → POST /api/argos/mcp-chat → cliente MCP (lib/mcp-host.ts)
+                                            ↓ stdio
+                                    servidor MCP de ARGOS
+                                            ↓ HTTP
+                              /api/argos/live · sidecar :8973
+```
+
+Es **el mismo servidor y el mismo protocolo** que consume Claude Desktop; lo
+único que cambia es quién hace de cliente. No hay una segunda implementación de
+las herramientas que pueda divergir de la primera.
+
+| Propiedad | Valor | Por qué |
+|---|---|---|
+| Modelo | `claude-opus-5` | — |
+| Herramientas | 7, solo lectura | Ninguna escribe en Wazuh ni bloquea |
+| Tope de iteraciones | 6 | Acota coste y evita bucles de herramientas |
+| Historial reenviado | 8 turnos | Permite preguntas de seguimiento («¿y esa IP?») |
+| Arranque del proceso hijo | 346 ms, una vez | Se reutiliza entre peticiones |
+| Primera herramienta | ~6,3 s | Va contra `/api/argos/live` |
+| Siguientes | ~2 ms | Caché de 30 s dentro del servidor MCP |
+
+Las siete advertencias metodológicas del trabajo van en el *system prompt*, no
+solo en las descripciones de las herramientas: son propiedades del proyecto, no
+de una llamada concreta. Cubren el score de ventana, el dominio de validez
+(atacantes ruidosos), la no transferencia a máquinas nuevas, el sesgo de la
+severidad CRITICAL hacia Trivy, el bloque CSR-LANL y la concentración del
+simulacro.
+
+**La respuesta es auditable.** El panel muestra encima de cada contestación qué
+herramientas se invocaron, con qué argumentos y cuánto tardaron. Sin esa traza,
+la respuesta de un modelo sobre datos de seguridad es una caja negra.
+
+#### Motor `keywords` — respaldo determinista
+
+Sin credencial, o si la llamada al modelo falla (clave inválida, sin saldo,
+servidor MCP caído), responde el comparador de palabras clave de siempre:
+normaliza el texto, busca términos como «severidad» o «reciente», extrae un
+número con una expresión regular y rellena una plantilla con datos reales. La
+pantalla se degrada, no se rompe. Medido: 6,7 s en el peor caso, con reintentos
+del SDK incluidos.
 
 ---
 
@@ -453,20 +498,20 @@ que reconoce palabras clave y no es un modelo de lenguaje.
 | Línea temporal | Reparto por posición en la lista | Agrupación por hora real |
 | Geolocalización | Puntos sintéticos indistinguibles | Marcados `(aprox.)` y separados en salud |
 | Fila `MCP Agents` | Permanentemente `planned` | Retirada |
-| Chat «MCP» | Sugería integración MCP | Renombrado `CONSULTA`, con aviso explícito |
+| Chat «MCP» | El nombre sugería una integración MCP que no existía | Integración MCP real: la web hace de host y consulta las siete herramientas |
 
 ### Limitaciones que permanecen, por diseño o por alcance
 
 | Elemento | Situación |
 |---|---|
 | Suricata y Zeek | **No integrados.** Ya no aparecen en ninguna métrica de panel. El campo `Suricata SID` de la ficha de detalle sigue existiendo y vale siempre `N/A`. |
-| MCP | **Nunca existió.** No hay dependencias MCP ni de ningún LLM en el proyecto; el historial de git lo confirma. El chat es y fue siempre un comparador de palabras clave, que funciona. El campo `MCP tool` de la ficha es una etiqueta de tipo de alerta con nombre heredado. |
+| MCP | **Integrado.** Servidor propio (`deploy/argos_mcp/server.ts`, siete herramientas de solo lectura) consumible desde Claude Desktop, Claude Code o el propio panel. El campo `MCP tool` de la ficha de detalle **no** tiene relación: es una etiqueta de tipo de alerta con nombre heredado y anterior. |
 | Campo `Sensores` | Siempre `Wazuh / AI Engine`. Solo hay una fuente real. |
 | Campo `Agente` en la ficha | Duplica «Destino». |
 | Bloque CSR-LANL | Visible pero **no interpretable**: el adaptador rellena con cero las familias de datos que Wazuh no produce. Ver sección 3.1. |
 | Ventana de la gráfica temporal | Solo cubre lo que quepa en 10.000 alertas (~5 h). |
 | Geolocalización aproximada | Sigue existiendo, pero ahora está declarada. |
-| Chat | Determinista por palabras clave, no un LLM. |
+| Chat | Requiere `ANTHROPIC_API_KEY` para el motor de lenguaje natural. Una suscripción de Claude **no sirve**: no expone credencial programática. Sin clave cae al comparador de palabras clave. |
 | `AI Score` de ventana | Satura y no distingue entre atacantes del mismo minuto. Se mantiene junto al riesgo por IP, que sí discrimina. |
 
 ## 12. Cómo levantarlo
