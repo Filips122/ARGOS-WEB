@@ -709,7 +709,15 @@ export function buildArgosLiveData(input: {
       correlationSources: [
         { label: 'Modelo de ventana', value: attacks.filter((attack) => attack.ai?.source === 'model').length },
         { label: 'Riesgo por IP', value: attacks.filter((attack) => attack.ipRisk).length },
-        { label: 'Reputacion AbuseIPDB', value: attacks.filter((attack) => attack.abuseipdb?.status === 'checked').length },
+        // 'cached' cuenta igual que 'checked': la alerta lleva reputacion real,
+        // solo que servida desde el disco. Contar solo 'checked' hacia que la
+        // fila marcase 0 con 4.447 alertas efectivamente enriquecidas.
+        {
+          label: 'Reputacion AbuseIPDB',
+          value: attacks.filter(
+            (attack) => attack.abuseipdb?.status === 'checked' || attack.abuseipdb?.status === 'cached'
+          ).length,
+        },
         { label: 'Explotacion real (CVE)', value: attacks.filter((attack) => attack.vulnerability).length },
       ],
     },

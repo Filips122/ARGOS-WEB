@@ -36,12 +36,20 @@ a 4,3 s por refresco).
 | `MANAGER` | **[real]** | `ONLINE`/`OFFLINE` según responda `/manager/info`. |
 | `INDEXER` | **[real]** | Si la consulta de alertas al Indexer tuvo éxito. |
 | `ALERTAS` | **[real]** | Alertas cargadas en este refresco. |
-| `AI SCORE` | **[derivado]** | Media del `score` de las alertas cargadas. |
+| `AI SCORE` | **[derivado]** | Media del `score` de las alertas cargadas. Es el mismo número que el KPI `AI Risk`; ver § 6.1 para por qué no debe leerse como nivel de riesgo. |
 | `THREAT` | **[derivado]** | `HIGH` si hay más de una alerta crítica, si no `ELEVATED`. |
 
+> **Sobre `THREAT`.** El *nivel de amenaza* es una convención de los centros de
+> operaciones: un semáforo global para la sala. Aquí su umbral es trivial —más
+> de una alerta crítica— y, como el 99,6 % de las críticas son hallazgos de
+> inventario (§ 6.4), en la práctica **está siempre en `HIGH`**. Es un
+> indicador decorativo heredado; no lo cites como medida.
+
 > Aquí había antes `MCP · 12 AGENTS` y `SURICATA · RUNNING`, ambos escritos a
-> mano. Retirados: ni MCP ni Suricata están integrados. Sustituidos por estado
-> del Indexer y recuento de alertas, que sí se miden.
+> mano. Retirados: ni Suricata está integrado, ni el `12 AGENTS` era medido.
+> Sustituidos por estado del Indexer y recuento de alertas, que sí se miden.
+> (El MCP sí está integrado hoy, pero como asistente conversacional —§ 10—, no
+> como una flota de agentes.)
 
 ---
 
@@ -65,8 +73,16 @@ a 4,3 s por refresco).
 | Risk Scoring | Si el modelo de IA respondió, con el score medio. |
 | Flow Average | Eventos de 24 h dividido entre 1.440 → flujos por minuto. |
 
-> Había una séptima fila, `MCP Agents`, permanentemente en `planned`. Retirada:
-> no hay integración MCP en el proyecto.
+**Qué aporta este bloque.** No mide amenazas: mide **si te puedes fiar del
+resto del panel**. Cada fila es una fuente que, si cae, deja un hueco que las
+demás pantallas no señalan. `GeoIP Enrichment` separa coordenadas reales de
+aproximadas precisamente porque el globo pinta ambas igual, y `Flow Average`
+—medido ahora en unos 37 eventos por minuto— da la escala que justifica la
+automatización.
+
+> Había una séptima fila, `MCP Agents`, permanentemente en `planned`. Retirada
+> por no medir nada. La integración MCP que existe hoy es el asistente
+> conversacional (§ 10), y su estado se consulta en el propio widget.
 
 ---
 
@@ -241,28 +257,249 @@ Wazuh dice severidad baja. Las dos «tienen razón» en su marco.
 
 ## 6. Panel analítico (`MiniDashboard`)
 
-### 6.1 KPIs
+### 6.1 KPIs — las seis tarjetas de cabecera
 
-| KPI | Origen | Qué representa |
+Cada tarjeta se explica en dos partes: **qué es** el concepto, con
+independencia de esta aplicación, y **qué aporta aquí**, con la medición del
+momento de escribir esto (10.001 alertas cargadas, modo `live`).
+
+---
+
+#### `Eventos 24h` — 53.201 **[real]**
+
+**Qué es.** El *volumen de eventos* es la métrica más básica de un SOC: cuántos
+registros ha generado la infraestructura en una ventana temporal. No dice nada
+sobre gravedad; mide caudal. En la industria es el número que dimensiona la
+plataforma, porque las licencias de SIEM suelen facturarse por eventos por
+segundo o por gigabytes ingeridos.
+
+**Qué aporta aquí.** Es el **denominador de todo lo demás**. Sirve para dos
+cosas concretas: detectar que la ingesta se ha parado (si cae a cero, el
+problema es de Wazuh, no de que no haya ataques) y dar la escala real del
+problema — 53.201 eventos en 24 h son unos **37 por minuto**, un caudal que
+ninguna persona puede revisar a mano. Ese hecho es lo que justifica el resto
+del trabajo: sin automatización, el 100 % de estas alertas se quedan sin mirar.
+
+Se calcula con una consulta de conteo aparte, no contando la lista cargada,
+porque contar es barato en el indexador y traer documentos no lo es.
+
+---
+
+#### `Alertas correladas` — 1.721.416, con 10.001 cargadas **[real]**
+
+**Qué es.** *Correlación* en un SIEM significa unir eventos distintos que por
+separado no dicen nada — un fallo de contraseña aquí, otro allá — en un
+incidente único con sentido. Es la función que distingue un SIEM de un simple
+almacén de registros.
+
+**Qué aporta aquí, y una advertencia sobre el nombre.** El número grande es el
+total de alertas de 30 días; el pequeño, cuántas se han traído de verdad. La
+pareja existe para que quede claro que **el panel no ve todo**: de 1,72
+millones se cargan 10.001, es decir el **0,58 %**. Cualquier porcentaje del
+panel se calcula sobre esa muestra, no sobre el total, y la muestra es la más
+reciente, no una aleatoria.
+
+**El nombre es heredado y engañoso: ese número no está correlado.** Es un
+recuento. La correlación real que sí ocurre en ARGOS se mide en la gráfica
+*Correlación por fuente* (§ 6.2), y son cuatro enriquecimientos, no 1,7
+millones de incidentes.
+
+---
+
+#### `Anomalías IA` — 4.589, media 47 **[derivado]**
+
+**Qué es.** Una *anomalía*, en detección, es una observación que se aparta del
+comportamiento normal aprendido. La palabra implica normalmente un método **no
+supervisado**: el modelo aprende qué es normal y marca lo que se sale, sin que
+nadie le haya dicho qué es un ataque.
+
+**Qué aporta aquí, y por qué el nombre no es correcto.** Esto **no es una
+detección de anomalías**. Es un recuento con umbral: alertas cuyo score de
+ventana supera 70. El modelo que lo produce es **supervisado** — se entrenó con
+etiquetas de ataque y benigno—, así que lo que cuenta la tarjeta es «cuántas
+ventanas clasificó el modelo como ataque con confianza alta», que es otra cosa.
+
+Lo que sí aporta: es la **medida del filtrado**. De 10.001 alertas, 4.589
+superan el umbral. Un analista que solo mire esas revisa el 46 % del volumen.
+Ese es el ahorro real que ofrece la capa de IA — y también su límite, porque
+reducir a la mitad sigue siendo inasumible a 37 alertas por minuto.
+
+---
+
+#### `Críticas` — 843 **[real]**
+
+**Qué es.** La *severidad* de una alerta es la etiqueta de gravedad que le
+asigna la regla que la disparó. En Wazuh viene del nivel de la regla (0–15), y
+es una decisión **del autor de la regla**, tomada de antemano y sin conocer tu
+entorno: no mide el riesgo real que esa alerta supone para ti.
+
+**Qué aporta aquí.** Es el KPI que **mejor demuestra por qué la severidad
+declarada no basta**, que es una de las conclusiones del trabajo. Medido ahora:
+de las 843 alertas CRITICAL, **840 son hallazgos del escáner de
+vulnerabilidades** (inventario de paquetes con CVE conocido, no ataques en
+curso) y solo **6** corresponden a CVE con explotación real conocida.
+
+Mientras tanto, la fuerza bruta que sí está ocurriendo vive en severidad LOW.
+Si un analista prioriza por esta tarjeta, dedica el día al inventario y no ve
+el ataque. El contraste completo está en § 6.4.
+
+---
+
+#### `Agentes activos` — 4 activos, 16 desconectados **[real]**
+
+**Qué es.** Un *agente* es el proceso que Wazuh instala en cada máquina
+vigilada y que le envía los registros. Un agente desconectado no genera
+alertas, y esa ausencia **no es lo mismo que ausencia de ataques**: es un punto
+ciego.
+
+**Qué aporta aquí.** Es la **honestidad sobre la cobertura**. Con 4 de 20
+agentes activos, el panel está mirando el 20 % del parque. Cualquier
+afirmación del tipo «no hay ataques contra la máquina X» es indefendible si X
+está entre las 16 desconectadas. La tarjeta enseña los dos números juntos
+precisamente para que no se pueda leer solo el bueno.
+
+---
+
+#### `AI Risk` — 47, `guarded` **[derivado]**
+
+**Qué es.** Un *nivel de riesgo agregado* pretende resumir en un número el
+estado general de la plataforma, normalmente promediando los scores
+individuales. Es un patrón habitual en paneles comerciales.
+
+**Qué aporta aquí — y por qué hay que citarlo con cuidado.** Es la media
+aritmética del score de ventana de las alertas cargadas. El problema está
+medido: **el score no es continuo, es prácticamente binario**. Sobre 10.001
+alertas hay solo **10 valores distintos**, y se reparten así:
+
+| Score | Alertas | % |
 |---|---|---|
-| **Eventos 24h** | **[real]** | Recuento total de alertas de las últimas 24 h. Consulta separada y barata. |
-| **Alertas correladas** | **[real]** | Total de 30 días, con cuántas se cargaron realmente (tope 10.000). |
-| **Anomalías IA** | **[derivado]** | Alertas con score ≥ 70, y la media al lado. |
-| **Críticas** | **[real]** | Alertas de severidad crítica. **Ojo: el 99,9 % son hallazgos de Trivy.** |
-| **Agentes activos** | **[real]** | Activos y desconectados. |
-| **AI Risk** | **[derivado]** | Media del score. `high` si ≥ 80. |
+| 2 | 5.412 | 54,1 % |
+| 100 | 4.482 | 44,8 % |
+| resto (8 valores) | 107 | 1,1 % |
+
+La media de una distribución con dos picos en los extremos es un número que
+**no describe a ninguna alerta**: no hay casi nada cerca de 47. Decir «el
+riesgo medio es 47, nivel guarded» sugiere una plataforma en riesgo moderado,
+cuando lo que hay son dos poblaciones separadas: una casi inofensiva y otra que
+el modelo da por ataque seguro.
+
+Se mantiene en el panel porque es la métrica que enseña el problema de
+saturación descrito en § 5, no porque sirva para decidir. **Para priorizar, usa
+el riesgo por IP** (§ 4), que sí discrimina entre atacantes.
 
 ### 6.2 Gráficas
 
-| Gráfica | Qué representa |
-|---|---|
-| **Ataques por tipo** | Reparto por el tipo inferido de la descripción. |
-| **Distribución por severidad** | Donut de crítica/alta/media/baja. |
-| **Alertas vs IA por hora** | **[real]** Ocho tramos de tres horas, por la **hora real** de cada alerta. Ver la nota de abajo. |
-| **Top países origen** | Los cinco países más frecuentes. |
-| **AI risk distribution** | Ocho tramos de 12,5 puntos. Con el score actual, casi todo se apila en pocos tramos. |
-| **MITRE tactics** | Tácticas ATT&CK de las reglas. |
-| **Correlation sources** | **[real]** Enriquecimientos que de verdad se aplican: modelo de ventana, riesgo por IP, reputación AbuseIPDB y explotación real de CVE. |
+#### `Ataques por tipo` **[derivado]**
+
+**Qué es.** Una *taxonomía de ataque* clasifica el evento por su técnica: fuerza
+bruta, escaneo, inyección… Permite saber a qué te enfrentas, no solo cuánto.
+
+**Qué aporta aquí.** El tipo **no viene de Wazuh**: se infiere del texto de la
+descripción de la regla con reglas de palabras clave propias. Medido:
+`Suspicious activity` 5.529, `Suspicious auth burst` 4.341, `SSH brute force`
+128, `SQLi probe` 2. Las dos primeras categorías, que son el 98 %, son
+genéricas — es decir, la gráfica confirma que **casi todo el tráfico hostil es
+del mismo tipo**, pero no lo caracteriza con finura. Es útil como comprobación
+de homogeneidad, no como inventario de técnicas.
+
+#### `Distribución por severidad` **[real]**
+
+**Qué es.** El reparto de alertas entre los cuatro niveles de gravedad. En un
+SOC sano se espera una pirámide: muchas bajas, pocas críticas.
+
+**Qué aporta aquí.** Es la entrada al hallazgo de § 6.4: la pirámide existe,
+pero **está mal poblada**. Lo crítico es inventario y lo bajo son ataques. La
+gráfica por sí sola induce a error; solo tiene valor leída junto al contraste
+de explotación real.
+
+#### `Alertas vs IA por hora` **[real]**
+
+**Qué es.** Una *serie temporal* reparte los eventos por su marca de tiempo.
+Sirve para ver campañas: un pico a una hora concreta sugiere una acción
+coordinada, un caudal plano sugiere ruido de fondo automatizado.
+
+**Qué aporta aquí.** Ocho tramos de tres horas, agrupados por la **hora real**
+de cada alerta. Superpone el volumen total y el detectado por la IA, para ver
+si el modelo sigue al caudal o se dispara en momentos concretos.
+
+> **Cómo leerla sin equivocarse.** Antes agrupaba por la posición en la lista
+> (`index % 8`), lo que producía ocho barras casi idénticas con forma de
+> distribución horaria que no lo era. Corregido.
+>
+> Consecuencia esperable de la corrección: como el panel carga las **10.000
+> alertas más recientes**, que a caudal actual son unas cinco horas, la gráfica
+> muestra datos en tres o cuatro tramos y **cero en el resto**. Eso es correcto
+> —antes los ceros se rellenaban con reparto artificial—, pero no es una
+> distribución de 24 horas: es la ventana que cabe en 10.000 alertas.
+
+#### `Top países origen` **[derivado]**
+
+**Qué es.** *Geolocalización de IP*: traducir una dirección a una ubicación
+aproximada consultando a qué bloque de red pertenece.
+
+**Qué aporta aquí.** Medido: Bulgaria 1.819, `UN` 1.175, Singapur 1.095, EE. UU.
+1.093. Dos advertencias que hacen falta para no sobreinterpretarla:
+
+1. `UN` significa **desconocido**, no un país. Es el segundo valor más
+   frecuente: más de mil alertas sin geolocalizar.
+2. **El país no es el atacante.** Es donde está la máquina usada, casi siempre
+   un servidor alquilado o comprometido. Sirve para agrupar y para el globo,
+   no para atribuir.
+
+#### `AI risk distribution` **[derivado]**
+
+**Qué es.** Un *histograma* del score: cuántas alertas caen en cada tramo. En un
+modelo bien calibrado se espera una curva repartida, con una cola en los
+extremos.
+
+**Qué aporta aquí.** Es **la prueba visual de la saturación**. Ocho tramos de
+12,5 puntos; medido, 5.412 alertas en el tramo `0-12,5` y 4.482 en `87,5-100`,
+con los seis tramos intermedios casi vacíos. Un histograma en forma de U es la
+firma de un clasificador que no gradúa: decide sí o no, no «cuánto».
+
+Al pulsar un tramo se abre un **detalle emergente** con los scores exactos que
+lo componen y cuántas alertas tiene cada uno. Existe para poder comprobar la
+afirmación anterior sin fiarse del dibujo: al abrir el tramo bajo se ve que las
+5.412 alertas tienen todas exactamente el mismo score, 2.
+
+#### `MITRE tactics` **[real]**
+
+**Qué es.** **MITRE ATT&CK** es un catálogo público que ordena el
+comportamiento de los atacantes en *tácticas* (el objetivo: obtener
+credenciales, moverse lateralmente…) y *técnicas* (cómo se consigue). Es el
+vocabulario común del sector para describir ataques sin ambigüedad.
+
+**Qué aporta aquí.** Traduce las reglas de Wazuh a ese vocabulario. Medido:
+`Initial Access` 5.442, `Credential Access` 4.558. Aporta dos cosas: hace el
+panel legible para alguien que no conozca las reglas de Wazuh, y **confirma el
+dominio de validez del trabajo** — las dos tácticas presentes son exactamente
+las de un atacante ruidoso que intenta entrar por la puerta. No hay
+`Persistence`, ni `Exfiltration`, ni `Defense Evasion`. Esa ausencia es la
+razón por la que el trabajo no puede afirmar nada sobre atacantes sigilosos.
+
+#### `Correlación por fuente` **[real]**
+
+**Qué es.** Cuántas alertas ha enriquecido cada fuente de información. Un
+*enriquecimiento* añade contexto externo a una alerta que llega sin él.
+
+**Qué aporta aquí.** Es el **inventario honesto de lo que ARGOS añade de
+verdad** sobre Wazuh. Cuatro filas, medidas ahora sobre 10.001 alertas:
+
+| Fuente | Alertas | Qué añade |
+|---|---|---|
+| Modelo de ventana | 10.001 | Score de IA. Cubre el 100 %. |
+| Riesgo por IP | 4.553 | Solo las que traen IP de origen utilizable. |
+| Reputación AbuseIPDB | 4.447 | Reputación externa, servida desde caché. |
+| Explotación real (CVE) | 5.399 | Solo las alertas que mencionan un CVE. |
+
+> **Defecto corregido al redactar esta sección.** La fila de AbuseIPDB contaba
+> únicamente el estado `checked` (consulta hecha en ese instante) e ignoraba
+> `cached`, así que **marcaba 0 con 4.447 alertas realmente enriquecidas**.
+> Corregido en `lib/argos-normalizers.ts`: ambos estados cuentan, porque la
+> alerta lleva reputación real en los dos casos.
+>
+> Antes de eso, las filas listaban Suricata y Zeek, que no están integrados y
+> valían siempre cero.
 
 > **Sobre la línea temporal.** Antes agrupaba por la posición en la lista
 > (`index % 8`), lo que producía ocho barras casi idénticas con forma de
@@ -280,37 +517,80 @@ Wazuh dice severidad baja. Las dos «tienen razón» en su marco.
 
 ### 6.3 Criminal Intelligence — AbuseIPDB **[externo]**
 
-Reputación colaborativa de IPs. Solo consulta direcciones **públicas que se
-repiten al menos 10 veces**, con caché en disco de 24 h y tope de consultas por
-refresco, para no agotar la cuota.
+**Qué es el concepto.** La *reputación de IP* es inteligencia colaborativa:
+miles de organizaciones denuncian las direcciones que las atacan, y el servicio
+devuelve una puntuación de abuso de 0 a 100 según cuántas denuncias
+independientes acumula esa dirección. Es información que **ninguna instalación
+puede generar sola**, porque requiere ver lo que le pasa a mucha gente a la vez.
 
-| Métrica | Qué representa |
-|---|---|
-| **Eligible IPs** | Públicas que superan el umbral de repetición. |
-| **Checked IPs** | Consultadas de verdad, y cuántas salieron de caché. |
-| **High Risk IPs** | Con puntuación de abuso ≥ 80. |
-| **Flagged Alerts** | Alertas cuya IP tiene puntuación ≥ 80. |
-| **Reputation donut** | Tramos 0-39 / 40-79 / 80-100 / desconocida. |
-| **Lookup status** | Por qué no se consultó cada IP: privada, bajo umbral, limitada por cuota. |
+**Qué aporta en ARGOS.** Responde a una pregunta que los datos propios no
+pueden contestar: *¿esta IP es un atacante conocido, o solo alguien que ha
+fallado la contraseña?* Es la única fuente del panel que aporta contexto de
+**fuera** del laboratorio.
+
+Para no agotar la cuota gratuita, solo consulta direcciones **públicas que se
+repiten al menos 10 veces**, con caché en disco de 24 h y un tope por refresco.
+
+| Métrica | Qué es | Medido ahora |
+|---|---|---|
+| **Eligible IPs** | Públicas que superan el umbral de repetición | 39 de 65 públicas |
+| **Checked IPs** | Consultadas de verdad, y cuántas desde caché | 38, todas cacheadas |
+| **High Risk IPs** | Con puntuación de abuso ≥ 80 | 36 |
+| **Flagged Alerts** | Alertas cuya IP supera ese umbral | — |
+| **Reputation donut** | Reparto en tramos 0-39 / 40-79 / 80-100 / desconocida | 2 en 40-79 |
+| **Top reported IPs** | Las cinco direcciones con más denuncias acumuladas | 45.148.10.141: 213.259 denuncias, NL |
+| **Lookup status** | Por qué no se consultó cada IP | privada, bajo umbral, cuota |
+
+**El dato que más dice:** de 39 IPs elegibles, **36 tienen reputación ≥ 80**.
+No son visitantes que se equivocan de contraseña: son direcciones que el resto
+de internet ya ha denunciado como hostiles. Y la primera acumula **213.259
+denuncias**, lo que confirma el perfil del trabajo — atacantes ruidosos y
+masivos, no dirigidos.
+
+**Limitación actual medida:** 5.448 de 10.001 alertas quedan en estado `error`
+de consulta (cuota o clave). Es decir, la cobertura real de esta tarjeta es del
+44 %, no del 100 %.
 
 ### 6.4 Explotación real — CISA KEV + EPSS **[externo]**
 
-Contrasta la severidad declarada con la explotación observada. **No modifica la
-severidad de Wazuh.**
+**Qué son los conceptos.** Tres piezas del vocabulario de vulnerabilidades:
 
-| Métrica | Qué representa |
-|---|---|
-| **CVE detectados** | Vulnerabilidades distintas en las alertas cargadas. |
-| **Explotados (KEV)** | Presentes en el catálogo de explotación activa de CISA. |
-| **Accionables** | En KEV, o con EPSS ≥ 0,1 (10 % de probabilidad de explotación en 30 días). |
-| **Ruido de inventario** | El resto, con el factor de reducción de la cola de revisión. |
+- **CVE** (*Common Vulnerabilities and Exposures*): el identificador único y
+  público de una vulnerabilidad concreta, del tipo `CVE-2026-31431`. Es una
+  matrícula, no una medida de gravedad.
+- **KEV** (*Known Exploited Vulnerabilities*): catálogo que publica la agencia
+  de ciberseguridad estadounidense (CISA) con las vulnerabilidades de las que
+  hay **constancia de explotación real en ataques observados**. Estar en KEV no
+  es una predicción: es un hecho comprobado.
+- **EPSS** (*Exploit Prediction Scoring System*): un modelo estadístico que
+  estima la **probabilidad de que una vulnerabilidad sea explotada en los
+  próximos 30 días**, de 0 a 1. Responde a «¿va a pasar?», no a «¿cuánto daño
+  haría?».
+
+La distinción que importa: la severidad clásica (CVSS, y el nivel de regla de
+Wazuh) mide **cuánto daño haría si alguien la explotara**. KEV y EPSS miden
+**si alguien la está explotando de verdad**. Son preguntas distintas, y la
+segunda es la que decide qué parcheas el lunes.
+
+**Qué aporta en ARGOS.** Contrasta la severidad declarada con la explotación
+observada. **No modifica la severidad de Wazuh**: se muestra al lado, como
+segunda opinión.
+
+| Métrica | Qué es | Medido ahora |
+|---|---|---|
+| **CVE detectados** | Vulnerabilidades distintas en las alertas cargadas | 5.193 |
+| **Explotados (KEV)** | Con explotación real confirmada por CISA | 2 |
+| **Accionables** | En KEV, o con EPSS ≥ 0,1 | 13 |
+| **Ruido de inventario** | El resto, con el factor de reducción | ×399 |
+| **Reparto por explotación** | Donut: explotados / probables / sin explotación conocida | 2 / 11 / 5.180 |
+| **Prioridad real de parcheo** | Los accionables ordenados por EPSS | `CVE-2026-31431`, EPSS 0,999 |
 
 #### El contraste — el bloque que da sentido al panel
 
 ```
-222  alertas marcadas CRITICAL por el nivel de regla de Wazuh
-219  de ellas son hallazgos de escáner, no ataques en curso
-  2  corresponden a CVE con explotación real conocida
+843  alertas marcadas CRITICAL por el nivel de regla de Wazuh
+840  de ellas son hallazgos de escáner, no ataques en curso
+  6  corresponden a CVE con explotación real conocida
 ```
 
 Medido sobre 30 días: de los **28 CVE que Trivy marca CRITICAL, ninguno está
@@ -318,8 +598,14 @@ en KEV**; uno etiquetado MEDIUM sí. Y la severidad LOW tiene un EPSS medio
 (0,00913) **superior** al de MEDIUM (0,00269).
 
 **Prioridad real de parcheo:** los CVE accionables ordenados por probabilidad
-de explotación. De 5.839 vulnerabilidades quedan **24** — una reducción de
-**243×**.
+de explotación. De 5.193 vulnerabilidades distintas quedan **13** — una
+reducción de **399×**. Ese factor es el argumento entero de esta tarjeta:
+convierte una cola de revisión imposible en una lista que cabe en una mañana.
+
+> Las cifras de este bloque se mueven con cada refresco, porque dependen de las
+> 10.000 alertas cargadas en ese momento. Una medición anterior daba 222 / 219 /
+> 2 y una reducción de 243×. **Lo que no cambia es la relación**: lo crítico es
+> casi todo inventario, y la reducción es de dos órdenes de magnitud.
 
 ---
 
