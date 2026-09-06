@@ -432,10 +432,47 @@ el panel no permite comprobar que el sistema distingue algo. Se identifica con
 
 ### El asistente conversacional
 
-Dos motores tras el mismo endpoint. Cuál responde depende de si hay credencial
-configurada, y la respuesta lo declara en el campo `engine`.
+Tres motores tras el mismo endpoint, con la misma forma de respuesta. Cuál
+contesta se decide por disponibilidad, y la respuesta lo declara en el campo
+`engine`. Los tres consultan **el mismo servidor MCP**, así que no hay dos
+implementaciones de las herramientas que puedan divergir.
 
-#### Motor `claude` — la web como host MCP
+| Motor | Credencial | Cuándo |
+|---|---|---|
+| `cli` | Suscripción de Claude | Preferido, si el CLI de Claude Code está instalado |
+| `api` | `ANTHROPIC_API_KEY` | Si no hay CLI, o si el CLI falla |
+| `keywords` | Ninguna | Respaldo final; siempre responde |
+
+`ARGOS_CHAT_ENGINE=cli|api|keywords` fuerza uno concreto.
+
+#### Motor `cli` — la suscripción
+
+Invoca el CLI de Claude Code en **modo no interactivo** (`--print`) con el
+servidor MCP de ARGOS cargado. No necesita clave de API: usa la sesión ya
+iniciada del CLI. Es la única vía por la que una suscripción puede alimentar la
+aplicación, porque no expone ninguna credencial programática.
+
+La pregunta viaja por **stdin**, nunca como argumento de línea de órdenes: el
+texto del usuario no puede interpretarse como opciones.
+
+**Superficie de ataque.** Este endpoint lanza un agente en la máquina. Se acota
+con `--strict-mcp-config` (solo el servidor de ARGOS), `--allowedTools` (solo
+las siete de lectura), `--disallowedTools` (se niegan Bash, Write, Edit…) y
+`--permission-prompts none` (nadie contesta prompts, luego se deniegan).
+Además, un máximo de 2 invocaciones concurrentes, porque cada agente ocupa
+300–500 MB. Aun así: **no expongas la aplicación fuera de localhost con este
+motor activo.**
+
+Medido de extremo a extremo, pregunta abierta («¿qué IP debería mirar primero y
+por qué?»): 27 s, 8 turnos, 6 herramientas encadenadas por decisión del modelo
+—`estado_plataforma`, `resumen_amenazas`, `buscar_alertas` y tres
+`riesgo_de_ip`—. La respuesta corrigió por su cuenta que la severidad LOW es
+donde vive la fuerza bruta real, avisó de que se trata de un atacante ruidoso y
+no de un APT, y se negó a bloquear declarándose de solo lectura: las
+advertencias del *system prompt* se sostienen en ejecución, no solo sobre el
+papel.
+
+#### Motor `api` — la web como host MCP
 
 Si existe `ANTHROPIC_API_KEY`, la aplicación web actúa como **host del Model
 Context Protocol**: levanta `deploy/argos_mcp/server.ts` como proceso hijo,
@@ -477,12 +514,16 @@ la respuesta de un modelo sobre datos de seguridad es una caja negra.
 
 #### Motor `keywords` — respaldo determinista
 
-Sin credencial, o si la llamada al modelo falla (clave inválida, sin saldo,
-servidor MCP caído), responde el comparador de palabras clave de siempre:
+Sin credencial, o si los motores de lenguaje natural fallan (CLI no instalado,
+agotado su tiempo, clave inválida, sin saldo, servidor MCP caído), responde el
+comparador de palabras clave de siempre:
 normaliza el texto, busca términos como «severidad» o «reciente», extrae un
 número con una expresión regular y rellena una plantilla con datos reales. La
-pantalla se degrada, no se rompe. Medido: 6,7 s en el peor caso, con reintentos
-del SDK incluidos.
+pantalla se degrada, no se rompe, **y lo declara**: la respuesta incluye por qué
+falló cada motor anterior, porque un fallo silencioso que responde peor es
+indistinguible de que el modelo sepa menos. Verificado forzando un tiempo de
+espera de 2 s en el CLI: `engine=keywords`,
+`degraded="cli: El CLI no respondio en 2 s"`, respuesta correcta.
 
 ---
 
@@ -511,7 +552,7 @@ del SDK incluidos.
 | Bloque CSR-LANL | Visible pero **no interpretable**: el adaptador rellena con cero las familias de datos que Wazuh no produce. Ver sección 3.1. |
 | Ventana de la gráfica temporal | Solo cubre lo que quepa en 10.000 alertas (~5 h). |
 | Geolocalización aproximada | Sigue existiendo, pero ahora está declarada. |
-| Chat | Requiere `ANTHROPIC_API_KEY` para el motor de lenguaje natural. Una suscripción de Claude **no sirve**: no expone credencial programática. Sin clave cae al comparador de palabras clave. |
+| Chat | El motor de suscripción depende de que el CLI de Claude Code esté instalado y con sesión iniciada; si se desinstala, cae a la API o a reglas. Lanza un agente local, así que el endpoint **no debe exponerse fuera de localhost**. |
 | `AI Score` de ventana | Satura y no distingue entre atacantes del mismo minuto. Se mantiene junto al riesgo por IP, que sí discrimina. |
 
 ## 12. Cómo levantarlo

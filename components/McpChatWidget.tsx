@@ -4,16 +4,20 @@ import { useEffect, useRef, useState } from 'react';
 
 type ToolTrace = { name: string; args: Record<string, unknown>; ms: number; chars: number; isError: boolean };
 
+type Engine = 'cli' | 'api' | 'keywords';
+
 type ChatMessage = {
   role: 'user' | 'assistant';
   content: string;
-  engine?: 'claude' | 'keywords';
+  engine?: Engine;
   toolCalls?: ToolTrace[];
+  degraded?: string;
 };
 
 type EngineStatus = {
-  engine: 'claude' | 'keywords';
+  engine: Engine;
   model?: string;
+  auth?: string;
   tools: number;
   reason?: string;
 };
@@ -23,6 +27,12 @@ const KEYWORD_HINT =
 
 const CLAUDE_HINT =
   'Conectado a Claude sobre las herramientas MCP de ARGOS. Pregunta en lenguaje natural: puede encadenar consultas, cruzar alertas con riesgo de IP y simular bloqueos en seco.';
+
+const ENGINE_LABEL: Record<Engine, string> = {
+  cli: 'MCP · suscripcion',
+  api: 'MCP · clave de API',
+  keywords: 'CONSULTA',
+};
 
 function formatArgs(args: Record<string, unknown>) {
   const entries = Object.entries(args ?? {});
@@ -36,6 +46,9 @@ export function McpChatWidget() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  // Identificador de la conversacion del CLI: permite preguntas de seguimiento
+  // ("y esa IP?") sin reenviar todo el historial.
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   // Se pregunta al servidor que motor va a contestar antes de escribir nada,
@@ -47,9 +60,12 @@ export function McpChatWidget() {
       .then((response) => response.json())
       .then((payload) => {
         if (cancelled) return;
+        const engine: Engine =
+          payload.engine === 'cli' || payload.engine === 'api' ? payload.engine : 'keywords';
         const next: EngineStatus = {
-          engine: payload.engine === 'claude' ? 'claude' : 'keywords',
+          engine,
           model: payload.model,
+          auth: payload.auth,
           tools: Number(payload.tools ?? 0),
           reason: payload.reason,
         };
@@ -60,7 +76,7 @@ export function McpChatWidget() {
             : [
                 {
                   role: 'assistant',
-                  content: next.engine === 'claude' ? CLAUDE_HINT : KEYWORD_HINT,
+                  content: next.engine === 'keywords' ? KEYWORD_HINT : CLAUDE_HINT,
                   engine: next.engine,
                 },
               ]
@@ -89,7 +105,7 @@ export function McpChatWidget() {
       const response = await fetch('/api/argos/mcp-chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, history }),
+        body: JSON.stringify({ message, history, sessionId }),
       });
       const payload = await response.json();
 
@@ -97,13 +113,16 @@ export function McpChatWidget() {
         throw new Error(payload.error ?? 'La consulta fallo');
       }
 
+      if (payload.sessionId) setSessionId(String(payload.sessionId));
+
       setMessages((current) => [
         ...current,
         {
           role: 'assistant',
           content: String(payload.answer ?? ''),
-          engine: payload.engine === 'claude' ? 'claude' : 'keywords',
+          engine: payload.engine === 'cli' || payload.engine === 'api' ? payload.engine : 'keywords',
           toolCalls: Array.isArray(payload.toolCalls) ? payload.toolCalls : undefined,
+          degraded: payload.degraded ? String(payload.degraded) : undefined,
         },
       ]);
     } catch (error) {
@@ -120,7 +139,7 @@ export function McpChatWidget() {
     }
   }
 
-  const usingClaude = status?.engine === 'claude';
+  const usingClaude = status?.engine === 'cli' || status?.engine === 'api';
 
   return (
     <div className="mcpChatDock" aria-live="polite">
@@ -128,7 +147,10 @@ export function McpChatWidget() {
         <section className="mcpChatPanel" aria-label="Consulta de alertas ARGOS">
           <div className="mcpChatHeader">
             <div>
-              <span>{usingClaude ? `MCP · ${status?.tools ?? 0} herramientas` : 'CONSULTA'}</span>
+              <span>
+                {status ? ENGINE_LABEL[status.engine] : 'CONSULTA'}
+                {usingClaude ? ` · ${status?.tools ?? 0} herramientas` : ''}
+              </span>
               <b>ARGOS SOC Assistant</b>
             </div>
             <button type="button" onClick={() => setOpen(false)} aria-label="Cerrar consulta">
@@ -138,6 +160,11 @@ export function McpChatWidget() {
           <div className="mcpChatMessages">
             {messages.map((message, index) => (
               <div key={`${message.role}-${index}`} className={`mcpChatMessage ${message.role}`}>
+                {message.degraded && (
+                  <p className="mcpChatDegraded">
+                    Motor preferente no disponible, respondido con el de respaldo ({message.degraded}).
+                  </p>
+                )}
                 {message.toolCalls && message.toolCalls.length > 0 && (
                   <ul className="mcpChatTrace">
                     {message.toolCalls.map((call, callIndex) => (

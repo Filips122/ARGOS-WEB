@@ -29,20 +29,24 @@ Ese mismo servidor se consume desde tres sitios:
 
 | Cliente | Cómo |
 |---|---|
-| El propio panel, en el navegador | Botón `CONSULTA`. Necesita `ANTHROPIC_API_KEY`. |
+| El propio panel, en el navegador | Botón `CONSULTA`. **No necesita configuración** si tienes Claude Code instalado. |
 | Claude Code | `.mcp.json` del repositorio, ya configurado. |
 | Claude Desktop | Añadir el bloque `mcpServers` de la cabecera de `server.ts`. |
 
-Para el chat del navegador, en `.env.local`:
+El chat del navegador elige motor solo:
 
-```txt
-ANTHROPIC_API_KEY=sk-ant-...
-```
+1. **Suscripción** — si encuentra el CLI de Claude Code, lo invoca en modo no
+   interactivo. No hace falta clave ni configuración.
+2. **Clave de API** — si defines `ANTHROPIC_API_KEY` en `.env.local`.
+3. **Reglas** — si no hay ninguno de los dos, o si fallan, responde un
+   comparador de palabras clave determinista y **lo declara** en pantalla.
 
-Sin esa clave el chat **no se rompe**: cae a un comparador de palabras clave
-determinista y lo declara en la respuesta. Una suscripción de Claude no sirve
-aquí: no expone ninguna credencial programática, es un producto distinto de la
-API. Detalle completo en `METRICAS.md`, sección 10.
+`ARGOS_CHAT_ENGINE=cli|api|keywords` fuerza uno concreto.
+
+> **Aviso.** Con el motor de suscripción, este endpoint lanza un agente en tu
+> máquina, acotado a las siete herramientas de solo lectura y con las de
+> escritura denegadas. Aun así, **no expongas la aplicación fuera de
+> localhost**. Detalle en `METRICAS.md`, sección 10.
 
 Comprobar qué motor responderá:
 
@@ -77,4 +81,5 @@ El proyecto incluye `overrides` para forzar `postcss@8.5.10` y evitar el aviso d
 - `app/api/attacks/route.ts`: endpoint mock `/api/attacks`.
 - `deploy/argos_mcp/server.ts`: servidor MCP, siete herramientas de solo lectura.
 - `lib/mcp-host.ts`: la web como host MCP (cliente stdio contra ese servidor).
+- `lib/claude-cli.ts`: motor de suscripción, vía CLI de Claude Code.
 - `app/api/argos/mcp-chat/route.ts`: chat del panel, con bucle de herramientas.

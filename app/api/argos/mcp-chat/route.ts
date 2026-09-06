@@ -1,16 +1,23 @@
 /**
- * Chat del panel ARGOS.
+ * Chat del panel ARGOS. Tres motores, el mismo endpoint y la misma forma de
+ * respuesta, para que el widget no tenga que distinguirlos.
  *
- * Dos motores, el mismo endpoint:
+ *  - "cli": usa el CLI de Claude Code en modo no interactivo, es decir, la
+ *    SUSCRIPCION del usuario. No necesita clave de API. Preferido si el CLI
+ *    esta instalado, porque no factura aparte. Ver lib/claude-cli.ts.
+ *  - "api": bucle propio de uso de herramientas con ANTHROPIC_API_KEY. La web
+ *    hace de HOST MCP (ver lib/mcp-host.ts).
+ *  - "keywords": comparador determinista de palabras clave. Es el respaldo
+ *    final: si el MCP o el modelo fallan, la pantalla se degrada, no se rompe.
  *
- *  - "claude": si existe ANTHROPIC_API_KEY, la peticion se resuelve con un
- *    bucle de uso de herramientas contra el servidor MCP de ARGOS. La web hace
- *    de HOST MCP (ver lib/mcp-host.ts): las siete herramientas que consume
- *    Claude Desktop son las mismas que se le ofrecen aqui al modelo.
- *  - "keywords": sin clave, responde el comparador de palabras clave de
- *    siempre. No se rompe la pantalla, solo se degrada la respuesta.
+ * Los tres consultan el MISMO servidor MCP (deploy/argos_mcp/server.ts), asi
+ * que no hay dos implementaciones de las herramientas que puedan divergir.
  *
  * Es de SOLO LECTURA. Ninguna herramienta escribe en Wazuh ni bloquea nada.
+ *
+ * Con el motor "cli" este endpoint lanza un agente en la maquina, acotado a
+ * siete herramientas de solo lectura. No expongas la aplicacion fuera de
+ * localhost con ese motor activo.
  */
 
 import Anthropic from '@anthropic-ai/sdk';
@@ -18,6 +25,7 @@ import { NextResponse } from 'next/server';
 import { enrichWazuhAlertsWithAi } from '@/lib/ai-scoring';
 import { buildArgosLiveData, type ArgosLiveData } from '@/lib/argos-normalizers';
 import { injectLocalBenignSimulation } from '@/lib/local-alert-simulator';
+import { askClaudeCli, findClaudeCli } from '@/lib/claude-cli';
 import { callMcpTool, getMcpSession } from '@/lib/mcp-host';
 import { wazuhApiGet } from '@/lib/wazuh';
 import { getRecentWazuhAlerts, getWazuhAlertsCount } from '@/lib/wazuh-indexer';
@@ -31,7 +39,23 @@ type ChatTurn = { role: 'user' | 'assistant'; content: string };
 type ChatRequest = {
   message?: string;
   history?: ChatTurn[];
+  /** Sesion del CLI, para que las preguntas de seguimiento tengan contexto. */
+  sessionId?: string | null;
 };
+
+type Engine = 'cli' | 'api' | 'keywords';
+
+/**
+ * Que motor manda. Se prefiere la suscripcion (CLI) porque no factura aparte;
+ * ARGOS_CHAT_ENGINE permite forzar uno concreto para comparar o depurar.
+ */
+function pickEngine(): Engine {
+  const forced = process.env.ARGOS_CHAT_ENGINE as Engine | undefined;
+  if (forced === 'cli' || forced === 'api' || forced === 'keywords') return forced;
+  if (findClaudeCli()) return 'cli';
+  if (process.env.ANTHROPIC_API_KEY) return 'api';
+  return 'keywords';
+}
 
 const severities: Severity[] = ['critical', 'high', 'medium', 'low'];
 
@@ -45,7 +69,7 @@ function getReason(error: unknown) {
 }
 
 // ---------------------------------------------------------------------------
-// Motor 1: Claude sobre las herramientas MCP
+// Motores de lenguaje natural sobre las herramientas MCP
 // ---------------------------------------------------------------------------
 
 /**
@@ -165,7 +189,7 @@ async function answerWithClaude(
 }
 
 // ---------------------------------------------------------------------------
-// Motor 2: comparador de palabras clave (sin clave de API)
+// Motor de respaldo: comparador de palabras clave
 // ---------------------------------------------------------------------------
 
 async function getMonthlyAlerts() {
@@ -326,33 +350,58 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: false, error: 'Message is required' }, { status: 400 });
     }
 
-    if (process.env.ANTHROPIC_API_KEY) {
+    const engine = pickEngine();
+    // Por que fallo cada motor antes de caer al siguiente. Se devuelve al
+    // navegador: un fallo silencioso que responde peor es indistinguible de
+    // que el modelo simplemente sepa menos.
+    const degraded: string[] = [];
+
+    if (engine === 'cli') {
+      try {
+        const result = await askClaudeCli(message, SYSTEM_PROMPT, body.sessionId);
+        return NextResponse.json({
+          ok: true,
+          engine: 'cli',
+          model: result.model,
+          auth: 'suscripcion',
+          answer: result.answer,
+          toolCalls: result.toolCalls,
+          turns: result.turns,
+          sessionId: result.sessionId,
+          listCostUsd: result.listCostUsd,
+        });
+      } catch (error) {
+        degraded.push(`cli: ${getReason(error)}`);
+      }
+    }
+
+    if (engine === 'api' || (engine === 'cli' && process.env.ANTHROPIC_API_KEY)) {
       try {
         const result = await answerWithClaude(message, history);
         return NextResponse.json({
           ok: true,
-          engine: 'claude',
+          engine: 'api',
           model: 'claude-opus-5',
+          auth: 'clave de API',
           answer: result.answer,
           toolCalls: result.toolCalls,
           turns: result.turns,
           usage: result.usage,
+          degraded: degraded.length ? degraded.join(' | ') : undefined,
         });
       } catch (error) {
-        // Clave invalida, sin saldo, MCP caido: se responde igualmente con el
-        // motor determinista en lugar de dejar la pantalla sin respuesta.
-        const fallback = await answerWithKeywords(message);
-        return NextResponse.json({
-          ok: true,
-          engine: 'keywords',
-          degraded: getReason(error),
-          ...fallback,
-        });
+        degraded.push(`api: ${getReason(error)}`);
       }
     }
 
+    // Respaldo final: siempre responde algo, con datos reales.
     const fallback = await answerWithKeywords(message);
-    return NextResponse.json({ ok: true, engine: 'keywords', ...fallback });
+    return NextResponse.json({
+      ok: true,
+      engine: 'keywords',
+      degraded: degraded.length ? degraded.join(' | ') : undefined,
+      ...fallback,
+    });
   } catch (error) {
     return NextResponse.json({ ok: false, error: getReason(error) }, { status: 500 });
   }
@@ -360,14 +409,38 @@ export async function POST(request: Request) {
 
 /** Sonda de estado para que el widget sepa que motor va a contestar. */
 export async function GET() {
-  const hasKey = Boolean(process.env.ANTHROPIC_API_KEY);
-  if (!hasKey) {
-    return NextResponse.json({ ok: true, engine: 'keywords', tools: 0, reason: 'Falta ANTHROPIC_API_KEY' });
+  const engine = pickEngine();
+
+  if (engine === 'cli') {
+    return NextResponse.json({
+      ok: true,
+      engine: 'cli',
+      auth: 'suscripcion',
+      model: process.env.ARGOS_CLAUDE_MODEL ?? 'sonnet',
+      cli: findClaudeCli(),
+      tools: 7,
+    });
   }
-  try {
-    const { tools } = await getMcpSession();
-    return NextResponse.json({ ok: true, engine: 'claude', model: 'claude-opus-5', tools: tools.length });
-  } catch (error) {
-    return NextResponse.json({ ok: true, engine: 'keywords', tools: 0, reason: getReason(error) });
+
+  if (engine === 'api') {
+    try {
+      const { tools } = await getMcpSession();
+      return NextResponse.json({
+        ok: true,
+        engine: 'api',
+        auth: 'clave de API',
+        model: 'claude-opus-5',
+        tools: tools.length,
+      });
+    } catch (error) {
+      return NextResponse.json({ ok: true, engine: 'keywords', tools: 0, reason: getReason(error) });
+    }
   }
+
+  return NextResponse.json({
+    ok: true,
+    engine: 'keywords',
+    tools: 0,
+    reason: 'Ni el CLI de Claude Code ni ANTHROPIC_API_KEY estan disponibles',
+  });
 }

@@ -813,6 +813,11 @@ button.wazuhAlertRow:hover {
 .mcpChatTrace li.err code {
   color: #ff8f8f;
 }
+.mcpChatDegraded {
+  margin: 0 0 6px !important;
+  color: #ffcf8f !important;
+  font-size: 0.66rem !important;
+}
 .mcpChatForm {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 70px;
