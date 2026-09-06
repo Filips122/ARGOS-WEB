@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "updated_at": "2026-09-02",
+  "complete": true,
+  "missing": [],
+  "note": "Mientras complete=false la promocion a bloqueo real esta vetada. El simulacro si corre: no ejecuta acciones.",
+  "confirmed": [
+    {
+      "cidr": "10.0.0.0/8",
+      "reason": "RFC1918 no enrutable",
+      "severity": "error"
+    },
+    {
+      "cidr": "172.16.0.0/12",
+      "reason": "RFC1918 no enrutable",
+      "severity": "error"
+    },
+    {
+      "cidr": "192.168.0.0/16",
+      "reason": "RFC1918 no enrutable",
+      "severity": "error"
+    },
+    {
+      "cidr": "127.0.0.0/8",
+      "reason": "loopback (agente 000)",
+      "severity": "error"
+    },
+    {
+      "cidr": "169.254.0.0/16",
+      "reason": "link-local",
+      "severity": "error"
+    },
+    {
+      "cidr": "100.64.0.0/10",
+      "reason": "CGNAT",
+      "severity": "error"
+    },
+    {
+      "cidr": "46.202.132.40/32",
+      "reason": "agente 003 clockworksolutions (host del escaner Trivy)",
+      "severity": "grave"
+    },
+    {
+      "cidr": "38.242.197.137/32",
+      "reason": "agente 011 clockworksolutions.es (servidor web)",
+      "severity": "grave"
+    },
+    {
+      "cidr": "45.67.217.109/32",
+      "reason": "agente 030 TPOT (honeypot)",
+      "severity": "grave"
+    },
+    {
+      "cidr": "185.197.195.125/32",
+      "reason": "host del Wazuh Indexer (endpoint de WAZUH_INDEXER_URL). Bloquearlo cortaria la fuente de datos de toda la plataforma.",
+      "severity": "grave"
+    }
+  ],
+  "candidates": [
+    {
+      "cidr": "212.227.99.16/32",
+      "reason": "agente 016 WazuhAgent3 (desconectado)",
+      "severity": "grave",
+      "source": "API de Wazuh, propuesto"
+    },
+    {
+      "cidr": "167.86.95.135/32",
+      "reason": "agente 018 server1-principal (desconectado)",
+      "severity": "grave",
+      "source": "API de Wazuh, propuesto"
+    },
+    {
+      "cidr": "5.189.164.52/32",
+      "reason": "agente 022 biblioteca (desconectado)",
+      "severity": "grave",
+      "source": "API de Wazuh, propuesto"
+    },
+    {
+      "cidr": "173.249.29.32/32",
+      "reason": "agente 024 server2-backup (desconectado)",
+      "severity": "grave",
+      "source": "API de Wazuh, propuesto"
+    }
+  ],
+  "completed_at": "2026-09-03",
+  "completed_rationale": "FALTA_2 correspondia a la IP del propio operador. Descartada por decision suya: el despliegue es de laboratorio/simulacro y esa IP no necesita exclusion. ATENCION: si alguna vez se promueve a bloqueo real, revisar esta decision antes; el operador conectandose por SSH apareceria como src_ip y podria autobloquearse."
+}

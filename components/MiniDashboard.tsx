@@ -27,6 +27,8 @@ export function MiniDashboard({
   const mitreStats = charts?.mitreTactics ?? mockMitreStats;
   const riskDistribution = charts?.riskDistribution;
   const correlationSources = charts?.correlationSources;
+  const criminalIntelligence = charts?.criminalIntelligence;
+  const vulnerabilityIntelligence = charts?.vulnerabilityIntelligence;
 
   return (
     <section className="dashboardDeck">
@@ -54,6 +56,10 @@ export function MiniDashboard({
         <HorizontalBars title="MITRE tactics" data={mitreStats} />
         <CorrelationSources data={correlationSources} />
       </div>
+
+      <VulnerabilityIntelligence data={vulnerabilityIntelligence} />
+
+      <CriminalIntelligenceDashboard data={criminalIntelligence} />
     </section>
   );
 }
@@ -223,6 +229,197 @@ function CorrelationSources({ data }: { data?: { label: string; value: number }[
     { label: 'All combined', value: 22 },
   ];
   return <HorizontalBars title="Correlación por fuente" data={sources} />;
+}
+
+/**
+ * Explotacion real de vulnerabilidades. No sustituye a la severidad de Wazuh:
+ * la contrasta. Medido sobre 30 dias de este despliegue, el 99,9 % de las
+ * alertas CRITICAL son hallazgos de Trivy y ninguno de sus 28 CVE marcados
+ * CRITICAL figura en el catalogo de explotacion activa de CISA.
+ */
+function VulnerabilityIntelligence({ data }: { data?: ArgosLiveData['charts']['vulnerabilityIntelligence'] }) {
+  if (!data) return null;
+
+  if (!data.available) {
+    return (
+      <section className="vulnDeck" aria-label="Explotacion real de vulnerabilidades">
+        <div className="dashboardHeader vulnHeader">
+          <div>
+            <p className="eyebrow">CISA KEV + EPSS</p>
+            <h2>Explotación real</h2>
+          </div>
+          <p>Catálogos no disponibles: sin conexión para descargar KEV/EPSS. El resto del panel no se ve afectado.</p>
+        </div>
+      </section>
+    );
+  }
+
+  const { contrast } = data;
+  const noise = data.distinctCves - data.actionableCves;
+
+  return (
+    <section className="vulnDeck" aria-label="Explotacion real de vulnerabilidades">
+      <div className="dashboardHeader vulnHeader">
+        <div>
+          <p className="eyebrow">CISA KEV + EPSS</p>
+          <h2>Explotación real</h2>
+        </div>
+        <p>
+          Contraste de la severidad declarada frente a explotación observada.
+          Catálogo KEV {data.kevVersion ?? '—'}. No modifica la severidad de Wazuh.
+        </p>
+      </div>
+
+      <div className="criminalKpiGrid">
+        <KpiCard label="CVE detectados" value={String(data.distinctCves)} trend={`${data.alertsWithCve} alertas`} tone="ai" />
+        <KpiCard label="Explotados (KEV)" value={String(data.exploitedCves)} trend="explotación confirmada" tone="critical" />
+        <KpiCard label="Accionables" value={String(data.actionableCves)} trend="KEV o EPSS ≥ 0,1" tone="high" />
+        <KpiCard
+          label="Ruido de inventario"
+          value={String(noise)}
+          trend={data.noiseReductionFactor ? `cola reducida ×${data.noiseReductionFactor}` : 'sin accionables'}
+          tone="ok"
+        />
+      </div>
+
+      {contrast.criticalAlerts > 0 && (
+        <div className="vulnContrast">
+          <p className="eyebrow">SEVERIDAD DECLARADA FRENTE A EXPLOTACIÓN</p>
+          <div className="vulnContrastRow">
+            <b>{contrast.criticalAlerts}</b>
+            <span>alertas marcadas CRITICAL por el nivel de regla de Wazuh</span>
+          </div>
+          <div className="vulnContrastRow">
+            <b>{contrast.criticalFromVulnScan}</b>
+            <span>de ellas son hallazgos de escáner de vulnerabilidades, no ataques en curso</span>
+          </div>
+          <div className="vulnContrastRow strong">
+            <b>{contrast.criticalActuallyExploited}</b>
+            <span>corresponden a CVE con explotación real conocida</span>
+          </div>
+        </div>
+      )}
+
+      <div className="chartGrid criminalCharts">
+        <HorizontalBars title="Reparto por explotación" data={data.severityVsExploitation} />
+        <TopExploitedCves data={data.topExploited} />
+      </div>
+    </section>
+  );
+}
+
+function TopExploitedCves({ data }: { data: ArgosLiveData['charts']['vulnerabilityIntelligence']['topExploited'] }) {
+  return (
+    <article className="chartCard">
+      <ChartTitle title="Prioridad real de parcheo" />
+      {data.length === 0 ? (
+        <p className="vulnEmpty">Ningún CVE accionable en las alertas cargadas.</p>
+      ) : (
+        <ul className="vulnList">
+          {data.map((item) => (
+            <li key={item.cve}>
+              <code>{item.cve}</code>
+              {item.inKev && <span className="vulnKev">KEV</span>}
+              <small>{item.epss === null ? 'EPSS < 0,02' : `EPSS ${item.epss.toFixed(3)}`}</small>
+              <b>{item.alerts}</b>
+            </li>
+          ))}
+        </ul>
+      )}
+    </article>
+  );
+}
+
+function CriminalIntelligenceDashboard({ data }: { data?: ArgosLiveData['charts']['criminalIntelligence'] }) {
+  const fallback = data ?? {
+    enabled: false,
+    minAlertsPerIp: 10,
+    cacheTtlHours: 24,
+    overview: {
+      publicIps: 0,
+      eligibleIps: 0,
+      checkedIps: 0,
+      cachedIps: 0,
+      highRiskIps: 0,
+      maliciousAlerts: 0,
+      privateAlerts: 0,
+      belowThresholdAlerts: 0,
+      rateLimitedAlerts: 0,
+    },
+    reputationBuckets: [
+      { label: '0-39', value: 0, color: '#38f8d4' },
+      { label: '40-79', value: 0, color: '#ffd166' },
+      { label: '80-100', value: 0, color: '#ff2f5f' },
+      { label: 'Unknown', value: 0, color: '#7ea8b8' },
+    ],
+    topReportedIps: [],
+    statusBreakdown: [],
+  };
+  const statusRows = fallback.statusBreakdown.length
+    ? fallback.statusBreakdown
+    : [{ label: fallback.enabled ? 'Waiting for repeated IPs' : 'API key missing', value: 0 }];
+
+  return (
+    <section className="criminalDeck" aria-label="Criminal Intelligence Dashboard">
+      <div className="dashboardHeader criminalHeader">
+        <div>
+          <p className="eyebrow">ABUSEIPDB ENRICHMENT</p>
+          <h2>Criminal Intelligence Dashboard</h2>
+        </div>
+        <p>
+          IPs publicas consultadas solo cuando se repiten al menos {fallback.minAlertsPerIp} veces.
+          Cache local: {fallback.cacheTtlHours}h.
+        </p>
+      </div>
+
+      <div className="criminalKpiGrid">
+        <KpiCard label="Eligible IPs" value={String(fallback.overview.eligibleIps)} trend="publicas repetidas" tone="ai" />
+        <KpiCard label="Checked IPs" value={String(fallback.overview.checkedIps)} trend={`${fallback.overview.cachedIps} desde cache`} tone="ok" />
+        <KpiCard label="High Risk IPs" value={String(fallback.overview.highRiskIps)} trend="score >= 80" tone="critical" />
+        <KpiCard label="Flagged Alerts" value={String(fallback.overview.maliciousAlerts)} trend="en alertas cargadas" tone="high" />
+      </div>
+
+      <div className="chartGrid criminalCharts">
+        <DonutChart title="AbuseIPDB reputation" data={fallback.reputationBuckets} />
+        <HorizontalBars title="Lookup status" data={statusRows} />
+        <TopReportedIps data={fallback.topReportedIps} enabled={fallback.enabled} rateLimitedUntil={fallback.rateLimitedUntil} />
+      </div>
+    </section>
+  );
+}
+
+function TopReportedIps({
+  data,
+  enabled,
+  rateLimitedUntil,
+}: {
+  data: { label: string; value: number; meta: string }[];
+  enabled: boolean;
+  rateLimitedUntil?: string;
+}) {
+  return (
+    <article className="chartCard criminalIpsCard">
+      <ChartTitle title="Top reported IPs" />
+      <div className="criminalIpList">
+        {data.length > 0 ? data.map((item) => (
+          <div className="criminalIpRow" key={item.label}>
+            <div>
+              <b>{item.label}</b>
+              <span>{item.meta}</span>
+            </div>
+            <strong>{item.value}</strong>
+          </div>
+        )) : (
+          <p>
+            {enabled
+              ? 'Sin IPs publicas repetidas suficientes para consultar.'
+              : 'Configura ABUSEIPDB_API_KEY para activar el enriquecimiento.'}
+          </p>
+        )}
+      </div>
+      {rateLimitedUntil && <small className="rateLimitNotice">Rate limited hasta {new Date(rateLimitedUntil).toLocaleString('es-ES')}</small>}
+    </article>
+  );
 }
 
 function ChartTitle({ title }: { title: string }) {

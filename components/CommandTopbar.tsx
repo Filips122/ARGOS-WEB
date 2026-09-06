@@ -24,9 +24,12 @@ export function CommandTopbar({
       </div>
 
       <div className="systemStrip" aria-label="Estado de servicios principales">
-        <StatusPill label="WAZUH" value={loading ? 'SYNC' : serviceStatus?.manager === 'offline' ? 'OFFLINE' : 'ONLINE'} tone={serviceStatus?.manager === 'offline' ? 'danger' : 'ok'} />
-        <StatusPill label="MCP" value="12 AGENTS" tone="ok" />
-        <StatusPill label="SURICATA" value="RUNNING" tone="info" />
+        {/* Antes habia aqui "MCP · 12 AGENTS" y "SURICATA · RUNNING", ambos
+            escritos a mano: ni MCP ni Suricata estan integrados. Sustituidos
+            por estado que si se mide. */}
+        <StatusPill label="MANAGER" value={loading ? 'SYNC' : serviceStatus?.manager === 'offline' ? 'OFFLINE' : 'ONLINE'} tone={serviceStatus?.manager === 'offline' ? 'danger' : 'ok'} />
+        <StatusPill label="INDEXER" value={loading ? 'SYNC' : serviceStatus?.indexer === 'offline' ? 'OFFLINE' : 'ONLINE'} tone={serviceStatus?.indexer === 'offline' ? 'danger' : 'ok'} />
+        <StatusPill label="ALERTAS" value={attacks.length.toLocaleString('es-ES')} tone="info" />
         <StatusPill label="AI SCORE" value={`${avgScore}`} tone="ai" />
         <StatusPill label="THREAT" value={criticalCount > 1 ? 'HIGH' : 'ELEVATED'} tone="danger" />
       </div>

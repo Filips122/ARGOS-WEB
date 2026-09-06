@@ -492,6 +492,7 @@ button.wazuhAlertRow:hover {
 .alertFooter { justify-content: flex-start; flex-wrap: wrap; }
 .alertFooter span { padding: 4px 6px; border: 1px solid rgba(56, 248, 212, 0.14); border-radius: 999px; }
 .miniModule { margin-top: auto; padding-top: 12px; border-top: 1px solid rgba(56, 248, 212, 0.16); }
+.sidebarMiniModule { margin-top: 0; margin-bottom: 24px; padding-top: 0; padding-bottom: 12px; border-top: 0; border-bottom: 1px solid rgba(56, 248, 212, 0.16); }
 .targetRow { padding: 8px 0; border-bottom: 1px solid rgba(126, 168, 184, 0.12); }
 .targetRow span { color: var(--cyan); font-size: 0.72rem; }
 
@@ -511,6 +512,10 @@ button.wazuhAlertRow:hover {
 .chartGrid { display: grid; gap: 12px; }
 .primaryCharts { grid-template-columns: 1.2fr 1fr 1.35fr 1fr; }
 .secondaryCharts { grid-template-columns: 1fr 1fr 1fr; margin-top: 12px; }
+.criminalDeck { margin-top: 18px; padding-top: 16px; border-top: 1px solid rgba(56, 248, 212, 0.16); }
+.criminalHeader { margin-bottom: 12px; }
+.criminalKpiGrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
+.criminalCharts { grid-template-columns: 0.9fr 1fr 1.1fr; }
 .chartCard { min-height: 240px; padding: 14px; border-radius: 18px; background: var(--panel-strong); }
 .chartTitle { align-items: center; margin-bottom: 10px; }
 .chartTitle h3 { margin: 0; font-size: 0.92rem; text-transform: uppercase; letter-spacing: 0.08em; }
@@ -648,6 +653,30 @@ button.wazuhAlertRow:hover {
   font-size: 0.76rem;
 }
 .riskScoreList b { color: var(--cyan); font-size: 0.82rem; }
+
+.criminalIpsCard { display: flex; flex-direction: column; }
+.criminalIpList { display: grid; gap: 9px; margin-top: 8px; }
+.criminalIpList p { margin: 20px 0 0; color: var(--muted); font-size: 0.84rem; line-height: 1.45; }
+.criminalIpRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 48px;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid rgba(126, 168, 184, 0.14);
+  background: rgba(2, 6, 23, 0.42);
+}
+.criminalIpRow b,
+.criminalIpRow span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.criminalIpRow b { color: #efffff; font-size: 0.86rem; }
+.criminalIpRow span { margin-top: 3px; color: var(--muted); font-size: 0.72rem; }
+.criminalIpRow strong { color: var(--red); text-align: right; font-size: 1.05rem; }
+.rateLimitNotice { margin-top: auto; padding-top: 12px; color: var(--orange); font-size: 0.72rem; }
 
 .mcpChatDock {
   position: fixed;
@@ -789,16 +818,209 @@ button.wazuhAlertRow:hover {
   .alertStream { grid-template-columns: repeat(2, minmax(0, 1fr)); flex: unset; max-height: unset; overflow: visible; }
   .kpiGrid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .primaryCharts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .criminalKpiGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .criminalCharts { grid-template-columns: 1fr 1fr; }
+  .criminalIpsCard { grid-column: 1 / -1; }
 }
 
 @media (max-width: 900px) {
   .appShell { padding: 10px; }
   .commandTopbar { height: auto; align-items: flex-start; flex-direction: column; clip-path: none; }
   .systemStrip { justify-content: flex-start; }
-  .commandGrid, .primaryCharts, .secondaryCharts { grid-template-columns: 1fr; }
+  .commandGrid, .primaryCharts, .secondaryCharts, .criminalCharts { grid-template-columns: 1fr; }
   .globeViewport { height: 520px; }
-  .kpiGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .kpiGrid, .criminalKpiGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .alertStream { grid-template-columns: 1fr; }
   .attackDetailCard { left: 10px; right: 10px; top: auto; bottom: 10px; width: auto; }
   .attackDetailGrid { grid-template-columns: 1fr; }
 }
+
+/* ===================== Simulacro de bloqueo temprano ===================== */
+
+.simWrap { max-width: 1180px; margin: 0 auto; padding: 28px 20px 64px; display: grid; gap: 18px; }
+
+.simHeader {
+  display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-end; justify-content: space-between;
+  border: 1px solid var(--line); background: var(--panel); backdrop-filter: blur(16px);
+  padding: 20px 22px;
+  clip-path: polygon(0 0, calc(100% - 22px) 0, 100% 22px, 100% 100%, 22px 100%, 0 calc(100% - 22px));
+}
+.simHeader h1 { margin: 2px 0 6px; font-size: 1.5rem; letter-spacing: -0.01em; }
+.simLede { margin: 0; max-width: 46ch; color: var(--muted); font-size: 0.86rem; line-height: 1.55; }
+
+.simControls { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.simControls label { display: grid; gap: 5px; }
+.simControls label span { color: var(--muted); font-size: 0.62rem; letter-spacing: 0.16em; text-transform: uppercase; }
+.simControls select {
+  background: rgba(2, 6, 23, 0.7); color: var(--text); border: 1px solid var(--line);
+  padding: 8px 10px; font-family: inherit; font-size: 0.82rem;
+}
+.simRun {
+  border: 1px solid var(--line-strong); background: rgba(56, 248, 212, 0.1); color: var(--cyan);
+  padding: 9px 18px; font-family: inherit; font-size: 0.72rem; font-weight: 800; letter-spacing: 0.14em;
+  cursor: pointer; transition: background 0.15s ease;
+}
+.simRun:hover:not(:disabled) { background: rgba(56, 248, 212, 0.2); }
+.simRun:disabled { opacity: 0.5; cursor: progress; }
+
+.simBanners { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.simBadge {
+  padding: 5px 12px; font-size: 0.64rem; font-weight: 800; letter-spacing: 0.14em;
+  border: 1px solid currentColor;
+}
+.simBadge.live { color: var(--green); }
+.simBadge.file { color: var(--yellow); }
+.simRange { color: var(--muted); font-size: 0.72rem; letter-spacing: 0.04em; }
+
+.simAlert { border-left: 3px solid var(--cyan); background: rgba(56, 248, 212, 0.06); padding: 12px 16px; }
+.simAlert b { display: block; font-size: 0.78rem; letter-spacing: 0.06em; margin-bottom: 4px; }
+.simAlert p { margin: 0 0 4px; font-size: 0.82rem; color: var(--muted); line-height: 1.5; }
+.simAlertWarn { border-left-color: var(--yellow); background: rgba(255, 209, 102, 0.07); }
+.simAlertBad { border-left-color: var(--red); background: rgba(255, 47, 95, 0.08); }
+.simAlertBad b { color: var(--red); }
+.simHint { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.74rem; }
+
+.simStats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); }
+.simStat { background: var(--panel-strong); padding: 14px 16px; display: grid; gap: 4px; }
+.simStat b { font-size: 1.5rem; font-variant-numeric: tabular-nums; line-height: 1.05; }
+.simStat span { color: var(--muted); font-size: 0.62rem; letter-spacing: 0.13em; text-transform: uppercase; }
+.simStat.danger b { color: var(--red); }
+.simStat.ok b { color: var(--green); }
+
+.simPlayer { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; border: 1px solid var(--line); background: var(--panel); padding: 12px 16px; }
+.simPlayer > button, .simSpeeds button {
+  border: 1px solid var(--line); background: rgba(2, 6, 23, 0.6); color: var(--text);
+  padding: 7px 13px; font-family: inherit; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.1em; cursor: pointer;
+}
+.simPlayer > button:disabled { opacity: 0.4; cursor: not-allowed; }
+.simSpeeds { display: flex; gap: 5px; }
+.simSpeeds button.active { border-color: var(--line-strong); color: var(--cyan); background: rgba(56, 248, 212, 0.12); }
+.simProgress { flex: 1; min-width: 120px; height: 5px; background: rgba(126, 168, 184, 0.18); overflow: hidden; }
+.simProgressBar { height: 100%; background: var(--cyan); transition: width 0.12s linear; }
+.simCounter { color: var(--muted); font-size: 0.72rem; font-variant-numeric: tabular-nums; }
+
+.simFeed { display: grid; gap: 9px; max-height: 560px; overflow-y: auto; padding-right: 4px; }
+.simCard {
+  border: 1px solid rgba(255, 47, 95, 0.3); background: rgba(255, 47, 95, 0.05);
+  padding: 11px 14px; display: grid; gap: 7px;
+  animation: simIn 0.24s ease-out;
+}
+.simCard.excluded { border-color: var(--red); background: rgba(255, 47, 95, 0.16); box-shadow: 0 0 22px rgba(255, 47, 95, 0.25); }
+@keyframes simIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .simCard { animation: none; } .simProgressBar { transition: none; } }
+
+.simCardTop { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+.simCardTop b { font-size: 1rem; font-family: ui-monospace, Menlo, Consolas, monospace; }
+.simCut { color: var(--yellow); font-size: 0.74rem; font-weight: 700; letter-spacing: 0.06em; }
+.simScore { margin-left: auto; color: var(--red); font-size: 0.95rem; font-variant-numeric: tabular-nums; font-weight: 800; }
+
+.simEvidence { display: flex; flex-wrap: wrap; gap: 14px; font-size: 0.76rem; color: var(--muted); }
+.simPrevented { color: var(--green); }
+
+.simCardFoot { display: flex; flex-wrap: wrap; gap: 14px; font-size: 0.68rem; color: rgba(126, 168, 184, 0.75); letter-spacing: 0.04em; }
+.simExcluded { color: var(--red); font-weight: 800; letter-spacing: 0.1em; }
+
+.simEmpty { color: var(--muted); font-size: 0.85rem; padding: 22px; border: 1px dashed var(--line); text-align: center; }
+
+/* --- simulacro: desglose, calidad de decisiones y etiquetas de evidencia --- */
+
+.simStat small { color: rgba(126, 168, 184, 0.7); font-size: 0.6rem; letter-spacing: 0.06em; }
+.simStat.warn b { color: var(--orange); }
+.simAlertOk { border-left-color: var(--green); background: rgba(72, 255, 155, 0.07); }
+.simAlertOk b { color: var(--green); }
+
+.simBreakdown { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 14px; }
+.simBreakCard { border: 1px solid var(--line); background: var(--panel); padding: 16px 18px; display: grid; gap: 10px; align-content: start; }
+.simBreakLede { margin: 0; color: var(--muted); font-size: 0.78rem; line-height: 1.5; }
+
+.simBreakRow { display: flex; align-items: baseline; gap: 11px; border-top: 1px solid rgba(126, 168, 184, 0.14); padding-top: 8px; }
+.simBreakRow b { font-size: 1.15rem; font-variant-numeric: tabular-nums; color: var(--cyan); min-width: 72px; }
+.simBreakRow span { font-size: 0.76rem; color: var(--muted); line-height: 1.4; }
+
+.simTop { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 5px; }
+.simTop li { display: flex; align-items: baseline; gap: 10px; font-size: 0.74rem; }
+.simTop code { font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--text); }
+.simTop span { color: var(--green); margin-left: auto; font-variant-numeric: tabular-nums; }
+.simTop small { color: var(--muted); min-width: 62px; text-align: right; }
+
+.simKinds { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: 8px; }
+.simKind { border: 1px solid rgba(126, 168, 184, 0.2); background: rgba(2, 6, 23, 0.45); padding: 9px 10px; display: grid; gap: 2px; }
+.simKind b { font-size: 1.2rem; font-variant-numeric: tabular-nums; }
+.simKind span { font-size: 0.58rem; letter-spacing: 0.1em; font-weight: 800; }
+.simKind small { font-size: 0.62rem; color: var(--muted); line-height: 1.35; }
+.simKind.k-enumeracion { border-color: rgba(255, 47, 95, 0.4); } .simKind.k-enumeracion span { color: var(--red); }
+.simKind.k-lateral { border-color: rgba(255, 138, 61, 0.4); } .simKind.k-lateral span { color: var(--orange); }
+.simKind.k-reputacion { border-color: rgba(255, 209, 102, 0.4); } .simKind.k-reputacion span { color: var(--yellow); }
+.simKind.k-volumen { border-color: rgba(126, 168, 184, 0.3); } .simKind.k-volumen span { color: var(--muted); }
+
+.simCaveat { margin: 2px 0 0; font-size: 0.72rem; color: var(--muted); line-height: 1.5; border-top: 1px solid rgba(255, 209, 102, 0.25); padding-top: 8px; }
+.simCaveat b { color: var(--yellow); }
+
+.simOrder { margin-left: 4px; }
+.simKindTag { font-size: 0.56rem; font-weight: 800; letter-spacing: 0.1em; padding: 2px 6px; border: 1px solid currentColor; }
+.simKindTag.k-enumeracion { color: var(--red); }
+.simKindTag.k-lateral { color: var(--orange); }
+.simKindTag.k-reputacion { color: var(--yellow); }
+.simKindTag.k-volumen { color: var(--muted); }
+
+.simCard.tight { border-left: 3px solid var(--yellow); }
+.simTightTag { color: var(--yellow); font-weight: 800; }
+.simNoEffect { color: var(--muted); font-style: italic; }
+
+/* --- contexto de explotacion real en las tarjetas del feed --- */
+.vulnTag {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  margin-top: 7px; padding: 5px 8px;
+  border-left: 2px solid currentColor;
+  background: rgba(2, 6, 23, 0.5);
+}
+.vulnTag b { font-size: 0.56rem; font-weight: 800; letter-spacing: 0.11em; }
+.vulnTag span { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.66rem; color: var(--text); }
+.vulnTag small { margin-left: auto; font-size: 0.6rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.vulnTag.kev { color: var(--red); background: rgba(255, 47, 95, 0.1); }
+.vulnTag.alta { color: var(--orange); background: rgba(255, 138, 61, 0.08); }
+.vulnTag.ruido { color: var(--muted); }
+
+/* --- panel de explotacion real (CISA KEV + EPSS) --- */
+.vulnDeck { margin-top: 26px; display: grid; gap: 16px; }
+.vulnHeader { border-bottom: 1px solid rgba(255, 138, 61, 0.28); padding-bottom: 12px; }
+.vulnHeader .eyebrow { color: var(--orange); }
+
+.vulnContrast {
+  border: 1px solid rgba(255, 138, 61, 0.3);
+  background: rgba(255, 138, 61, 0.05);
+  padding: 14px 18px; display: grid; gap: 9px;
+}
+.vulnContrastRow { display: flex; align-items: baseline; gap: 13px; }
+.vulnContrastRow b {
+  font-size: 1.45rem; font-variant-numeric: tabular-nums; color: var(--orange);
+  min-width: 76px; text-align: right;
+}
+.vulnContrastRow span { font-size: 0.8rem; color: var(--muted); line-height: 1.45; }
+.vulnContrastRow.strong b { color: var(--red); }
+.vulnContrastRow.strong span { color: var(--text); }
+
+.vulnList { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 7px; }
+.vulnList li { display: flex; align-items: baseline; gap: 9px; font-size: 0.76rem; }
+.vulnList code { font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--text); }
+.vulnList .vulnKev {
+  font-size: 0.55rem; font-weight: 800; letter-spacing: 0.1em;
+  color: var(--red); border: 1px solid currentColor; padding: 1px 5px;
+}
+.vulnList small { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+.vulnList b { color: var(--orange); font-variant-numeric: tabular-nums; min-width: 34px; text-align: right; }
+.vulnEmpty { color: var(--muted); font-size: 0.78rem; margin: 12px 0 0; }
+
+/* --- riesgo por IP: extra junto al AI Score de ventana --- */
+.ipRiskTag {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  margin-top: 7px; padding: 5px 8px;
+  border-left: 2px solid currentColor;
+  background: rgba(2, 6, 23, 0.5);
+}
+.ipRiskTag b { font-size: 0.72rem; font-weight: 800; letter-spacing: 0.04em; font-variant-numeric: tabular-nums; }
+.ipRiskTag span { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.64rem; color: var(--text); }
+.ipRiskTag small { margin-left: auto; font-size: 0.6rem; color: var(--muted); }
+.ipRiskTag.alto { color: var(--red); background: rgba(255, 47, 95, 0.1); }
+.ipRiskTag.medio { color: var(--orange); background: rgba(255, 138, 61, 0.08); }
+.ipRiskTag.bajo { color: var(--green); background: rgba(72, 255, 155, 0.06); }

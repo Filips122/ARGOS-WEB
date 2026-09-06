@@ -33,6 +33,27 @@ export type Attack = {
   sensorSources: SensorSource[];
   timestamp: string;
   receivedAt?: string;
+  /** Contexto de explotacion real. Se anade AL LADO de severity, no la sustituye:
+   *  Wazuh sigue diciendo lo que dice y esto informa de si eso se explota. */
+  vulnerability?: {
+    cve: string;
+    inKev: boolean;
+    epss: number | null;
+    actionable: boolean;
+  };
+  /** true cuando las coordenadas de origen son de la lista de reserva, no reales. */
+  geoApproximate?: boolean;
+  /** Riesgo de la IP de origen segun su conducta. Extra, junto al score de ventana. */
+  ipRisk?: {
+    score: number;
+    blocked: boolean;
+    decidedAtAlert: number | null;
+    alertsSeen: number;
+    evidenceKind: 'enumeracion' | 'lateral' | 'reputacion' | 'volumen';
+    usersTried: number;
+    agentsReached: number;
+    subnetHostileRatio: number;
+  };
   ai?: {
     modelId: string;
     modelVersion?: string;
@@ -59,6 +80,26 @@ export type Attack = {
       source: string;
       warning?: string;
     };
+  };
+  abuseipdb?: {
+    ip: string;
+    status:
+      | 'checked'
+      | 'cached'
+      | 'below_threshold'
+      | 'private'
+      | 'not_configured'
+      | 'rate_limited'
+      | 'error';
+    seenCount: number;
+    score?: number;
+    totalReports?: number;
+    countryCode?: string;
+    isp?: string;
+    domain?: string;
+    lastReportedAt?: string | null;
+    checkedAt?: string;
+    reason?: string;
   };
 };
 

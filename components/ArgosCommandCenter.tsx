@@ -68,7 +68,12 @@ export function ArgosCommandCenter() {
       )}
 
       <section className="commandGrid" aria-label="Pantalla de mando ARGOS-SOC IA">
-        <CommandSidebar agentHealth={data?.agentHealth} selectedRegions={selectedRegions} onToggleRegion={toggleRegion} />
+        <CommandSidebar
+          attacks={visibleAttacks}
+          agentHealth={data?.agentHealth}
+          selectedRegions={selectedRegions}
+          onToggleRegion={toggleRegion}
+        />
         <AttackGlobe
           attacks={visibleAttacks}
           mode={attackMode}

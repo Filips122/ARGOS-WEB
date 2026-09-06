@@ -10,7 +10,7 @@ type ChatMessage = {
 const initialMessages: ChatMessage[] = [
   {
     role: 'assistant',
-    content: 'MCP SOC listo. Preguntame por alertas, severidad o clasificacion IA.',
+    content: 'Consulta determinista sobre las alertas cargadas. No es un modelo de lenguaje: reconoce palabras clave. Prueba con "ultimos 5 critical" o "resumen de severidad".',
   },
 ];
 
@@ -38,7 +38,7 @@ export function McpChatWidget() {
       const payload = await response.json();
 
       if (!response.ok || !payload.ok) {
-        throw new Error(payload.error ?? 'MCP query failed');
+        throw new Error(payload.error ?? 'La consulta fallo');
       }
 
       setMessages((current) => [...current, { role: 'assistant', content: String(payload.answer ?? '') }]);
@@ -59,13 +59,13 @@ export function McpChatWidget() {
   return (
     <div className="mcpChatDock" aria-live="polite">
       {open && (
-        <section className="mcpChatPanel" aria-label="Chat MCP ARGOS">
+        <section className="mcpChatPanel" aria-label="Consulta de alertas ARGOS">
           <div className="mcpChatHeader">
             <div>
-              <span>MCP</span>
+              <span>CONSULTA</span>
               <b>ARGOS SOC Assistant</b>
             </div>
-            <button type="button" onClick={() => setOpen(false)} aria-label="Cerrar chat MCP">
+            <button type="button" onClick={() => setOpen(false)} aria-label="Cerrar consulta">
               x
             </button>
           </div>
@@ -91,7 +91,7 @@ export function McpChatWidget() {
               value={input}
               onChange={(event) => setInput(event.target.value)}
               placeholder="Ej: ultimos 5 critical"
-              aria-label="Pregunta al MCP de ARGOS"
+              aria-label="Consulta sobre las alertas"
             />
             <button type="submit" disabled={loading || !input.trim()}>
               Send
@@ -107,10 +107,8 @@ export function McpChatWidget() {
           setOpen((current) => !current);
           window.setTimeout(() => inputRef.current?.focus(), 0);
         }}
-        aria-label={open ? 'Cerrar chat MCP' : 'Abrir chat MCP'}
-      >
-        MCP
-      </button>
+        aria-label={open ? 'Cerrar consulta' : 'Abrir consulta de alertas'}
+      >CONSULTA</button>
     </div>
   );
 }

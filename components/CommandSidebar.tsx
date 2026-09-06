@@ -1,29 +1,38 @@
-import { agentHealth as mockAgentHealth } from '@/lib/mock-data';
+import { agentHealth as mockAgentHealth, attacks as mockAttacks, type Attack } from '@/lib/mock-data';
 
-const layers = ['Wazuh Alerts', 'GeoIP Origins', 'AI Risk Score', 'Agent Targets'];
 export const regions = ['Europe', 'Asia', 'North America', 'South America', 'Africa', 'Oceania'] as const;
 export type RegionFilter = typeof regions[number];
 
 export function CommandSidebar({
+  attacks = mockAttacks,
   agentHealth = mockAgentHealth,
   selectedRegions = regions,
   onToggleRegion,
 }: {
+  attacks?: Attack[];
   agentHealth?: typeof mockAgentHealth;
   selectedRegions?: readonly RegionFilter[];
   onToggleRegion?: (region: RegionFilter) => void;
 }) {
   const selectedRegionSet = new Set(selectedRegions);
+  // Antes mostraba 96/87/78/69 por posicion, numeros decorativos que parecian
+  // una puntuacion de riesgo. Ahora es el recuento real de alertas por destino.
+  const targetCounts = new Map<string, number>();
+  for (const attack of attacks) {
+    targetCounts.set(attack.target.name, (targetCounts.get(attack.target.name) ?? 0) + 1);
+  }
+  const topTargets = [...targetCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4);
 
   return (
     <aside className="commandPanel sidebarPanel">
-      <SectionTitle eyebrow="CONTROL" title="Operational Layers" />
-      <div className="layerList">
-        {layers.map((layer) => (
-          <label className="layerItem" key={layer}>
-            <input type="checkbox" defaultChecked />
-            <span>{layer}</span>
-          </label>
+      <div className="miniModule sidebarMiniModule">
+        <p className="eyebrow">TOP TARGETS</p>
+        {topTargets.map(([target, count], index) => (
+          <div className="targetRow" key={target}>
+            <span>0{index + 1}</span>
+            <b>{target}</b>
+            <small>{count.toLocaleString('es-ES')} alertas</small>
+          </div>
         ))}
       </div>
 

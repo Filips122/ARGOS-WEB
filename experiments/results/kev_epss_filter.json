@@ -1,0 +1,234 @@
+{
+  "generated_from": "argos-alerts_30d.jsonl",
+  "trivy_alerts": 408956,
+  "distinct_cves": 5839,
+  "kev_catalog_size": 1694,
+  "epss_scored": 5827,
+  "epss_unscored": 12,
+  "filters": {
+    "total": {
+      "cves": 5839,
+      "alerts": 408956
+    },
+    "critical_high": {
+      "cves": 1121,
+      "alerts": 85851
+    },
+    "epss_0.01": {
+      "cves": 178,
+      "alerts": 20786
+    },
+    "epss_0.05": {
+      "cves": 37,
+      "alerts": 2750
+    },
+    "epss_0.1": {
+      "cves": 20,
+      "alerts": 1260
+    },
+    "epss_0.5": {
+      "cves": 8,
+      "alerts": 480
+    },
+    "kev": {
+      "cves": 6,
+      "alerts": 420
+    },
+    "sev_CRITICAL": {
+      "cves": 28,
+      "in_kev": 0,
+      "epss_mean": 0.00858
+    },
+    "sev_HIGH": {
+      "cves": 1093,
+      "in_kev": 5,
+      "epss_mean": 0.0097
+    },
+    "sev_MEDIUM": {
+      "cves": 3997,
+      "in_kev": 1,
+      "epss_mean": 0.00269
+    },
+    "sev_LOW": {
+      "cves": 650,
+      "in_kev": 0,
+      "epss_mean": 0.00913
+    }
+  },
+  "actionable": {
+    "criterion": "en KEV o EPSS >= 0.1",
+    "cves": 24,
+    "alerts": 1560,
+    "reduction_factor": 243.3,
+    "list": [
+      {
+        "cve": "CVE-2026-31431",
+        "in_kev": true,
+        "epss": 0.99907,
+        "alerts": 60,
+        "trivy_severity": "HIGH"
+      },
+      {
+        "cve": "CVE-2025-27363",
+        "in_kev": true,
+        "epss": 0.27775,
+        "alerts": 60,
+        "trivy_severity": "HIGH"
+      },
+      {
+        "cve": "CVE-2025-48384",
+        "in_kev": true,
+        "epss": 0.04109,
+        "alerts": 120,
+        "trivy_severity": "HIGH"
+      },
+      {
+        "cve": "CVE-2026-48710",
+        "in_kev": true,
+        "epss": 0.02099,
+        "alerts": 60,
+        "trivy_severity": "MEDIUM"
+      },
+      {
+        "cve": "CVE-2025-38352",
+        "in_kev": true,
+        "epss": 0.01278,
+        "alerts": 60,
+        "trivy_severity": "HIGH"
+      },
+      {
+        "cve": "CVE-2026-53362",
+        "in_kev": true,
+        "epss": 0.0051,
+        "alerts": 60,
+        "trivy_severity": "HIGH"
+      },
+      {
+        "cve": "CVE-2026-43284",
+        "in_kev": false,
+        "epss": 0.93235,
+        "alerts": 60,
+        "trivy_severity": "HIGH"
+      },
+      {
+        "cve": "CVE-2026-43500",
+        "in_kev": false,
+        "epss": 0.92855,
+        "alerts": 60,
+        "trivy_severity": "HIGH"
+      },
+      {
+        "cve": "CVE-2023-45288",
+        "in_kev": false,
+        "epss": 0.91969,
+        "alerts": 60,
+        "trivy_severity": "HIGH"
+      },
+      {
+        "cve": "CVE-2004-0230",
+        "in_kev": false,
+        "epss": 0.80286,
+        "alerts": 60,
+        "trivy_severity": "LOW"
+      },
+      {
+        "cve": "CVE-2025-6965",
+        "in_kev": false,
+        "epss": 0.75832,
+        "alerts": 60,
+        "trivy_severity": "HIGH"
+      },
+      {
+        "cve": "CVE-2011-3389",
+        "in_kev": false,
+        "epss": 0.73327,
+        "alerts": 60,
+        "trivy_severity": "LOW"
+      },
+      {
+        "cve": "CVE-2025-22037",
+        "in_kev": false,
+        "epss": 0.66418,
+        "alerts": 60,
+        "trivy_severity": "MEDIUM"
+      },
+      {
+        "cve": "CVE-2026-23918",
+        "in_kev": false,
+        "epss": 0.49727,
+        "alerts": 60,
+        "trivy_severity": "HIGH"
+      },
+      {
+        "cve": "CVE-2025-15467",
+        "in_kev": false,
+        "epss": 0.48211,
+        "alerts": 120,
+        "trivy_severity": "HIGH"
+      },
+      {
+        "cve": "CVE-2025-21760",
+        "in_kev": false,
+        "epss": 0.36848,
+        "alerts": 60,
+        "trivy_severity": "MEDIUM"
+      },
+      {
+        "cve": "CVE-2008-4609",
+        "in_kev": false,
+        "epss": 0.32123,
+        "alerts": 60,
+        "trivy_severity": "LOW"
+      },
+      {
+        "cve": "CVE-2026-49975",
+        "in_kev": false,
+        "epss": 0.31042,
+        "alerts": 60,
+        "trivy_severity": "HIGH"
+      },
+      {
+        "cve": "CVE-2019-6110",
+        "in_kev": false,
+        "epss": 0.20906,
+        "alerts": 60,
+        "trivy_severity": "LOW"
+      },
+      {
+        "cve": "CVE-2025-37924",
+        "in_kev": false,
+        "epss": 0.20744,
+        "alerts": 60,
+        "trivy_severity": "HIGH"
+      },
+      {
+        "cve": "CVE-2008-0456",
+        "in_kev": false,
+        "epss": 0.19036,
+        "alerts": 60,
+        "trivy_severity": "LOW"
+      },
+      {
+        "cve": "CVE-2025-21758",
+        "in_kev": false,
+        "epss": 0.13707,
+        "alerts": 60,
+        "trivy_severity": "MEDIUM"
+      },
+      {
+        "cve": "CVE-2020-15778",
+        "in_kev": false,
+        "epss": 0.12996,
+        "alerts": 60,
+        "trivy_severity": "LOW"
+      },
+      {
+        "cve": "CVE-2007-0086",
+        "in_kev": false,
+        "epss": 0.10094,
+        "alerts": 60,
+        "trivy_severity": "LOW"
+      }
+    ]
+  }
+}

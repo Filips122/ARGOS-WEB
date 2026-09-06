@@ -76,7 +76,10 @@ function getAttackAgeMs(attack: Attack, now: number) {
 }
 
 function getOriginLabel(attack: Attack) {
-  return [attack.source.city, attack.source.country].filter(Boolean).join(', ') || attack.source.name;
+  const label = [attack.source.city, attack.source.country].filter(Boolean).join(', ') || attack.source.name;
+  // Coordenadas de reserva asignadas por hash de la IP: se marca para no
+  // presentar una posicion sintetica como geolocalizacion real.
+  return attack.geoApproximate ? `${label} (aprox.)` : label;
 }
 
 function getStableUnitInterval(value: string) {

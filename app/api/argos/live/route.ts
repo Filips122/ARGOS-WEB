@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
+import { buildCriminalIntelligenceStats, enrichAttacksWithAbuseIpDb } from '@/lib/abuseipdb';
 import { enrichWazuhAlertsWithAi } from '@/lib/ai-scoring';
 import { buildArgosLiveData } from '@/lib/argos-normalizers';
+import { getVulnerabilityIndex, indexStatus } from '@/lib/kev-epss';
 import { injectLocalBenignSimulation } from '@/lib/local-alert-simulator';
 import { wazuhApiGet } from '@/lib/wazuh';
 import { getRecentWazuhAlerts, getWazuhAlertsCount } from '@/lib/wazuh-indexer';
@@ -33,6 +35,10 @@ export async function GET() {
     getWazuhAlertsCount('now-24h'),
   ]);
 
+  // Indice de explotacion real (KEV + EPSS). Cacheado 24 h en disco; si falla la
+  // descarga devuelve null y el panel funciona igual, solo sin el dato extra.
+  const vulnIndex = await getVulnerabilityIndex();
+
   const rawAlerts = alerts.status === 'fulfilled' ? alerts.value.data : null;
   const localAlerts = injectLocalBenignSimulation(rawAlerts);
   const scoredAlerts = await enrichWazuhAlertsWithAi(localAlerts);
@@ -41,6 +47,8 @@ export async function GET() {
     manager: manager.status === 'fulfilled' ? manager.value : null,
     agents: agents.status === 'fulfilled' ? agents.value : null,
     alerts: scoredAlerts,
+    vulnIndex,
+    kevVersion: indexStatus(vulnIndex)?.kevVersion ?? null,
     events24h: events24h.status === 'fulfilled' ? events24h.value : null,
     errors: {
       manager: manager.status === 'rejected' ? getReason(manager.reason) : null,
@@ -48,6 +56,14 @@ export async function GET() {
       alerts: alerts.status === 'rejected' ? getReason(alerts.reason) : alerts.value.error,
     },
   });
+
+  if (liveData.mode === 'demo') {
+    liveData.charts.criminalIntelligence = buildCriminalIntelligenceStats(liveData.attacks);
+  } else {
+    const enriched = await enrichAttacksWithAbuseIpDb(liveData.attacks);
+    liveData.attacks = enriched.attacks;
+    liveData.charts.criminalIntelligence = enriched.criminalIntelligence;
+  }
 
   return NextResponse.json(liveData);
 }
