@@ -187,6 +187,22 @@ aciertos de cada cincuenta revisiones.
 Se mantiene visible porque documenta una decisión del trabajo (probar
 transferencia entre dominios y medir que no funciona), no porque aporte señal.
 
+#### Bloque «Segunda opinión (Transformer)»
+
+Aparece debajo de la rejilla, separado, cuando la alerta tiene riesgo por IP.
+Está fuera de la rejilla a propósito: es una **anotación**, no un campo más de
+la alerta.
+
+| Campo | Qué es | Qué aporta aquí |
+|---|---|---|
+| **Score** | Salida del Transformer, 0–100 | Responde a la misma pregunta que `IP <n>`: ¿merece bloqueo esta dirección? |
+| **Umbral (K=n)** | Umbral del presupuesto en que se evaluó | Fijado a precisión ≥ 0,99 en validación. Hay uno por K |
+| **Cruza umbral** | Si dispararía | Comparado con el principal da el acuerdo de la cabecera |
+| **Avisos decisivos** | Los tres avisos con más peso de atención, en barras | **Lo único que el modelo principal no puede dar.** Dice dónde miró |
+
+La cabecera marca `coincide` o `discrepa`, y el pie repite que es test interno
+sin validación externa y que **el bloqueo lo decide el modelo principal**.
+
 #### Etiquetas internas
 
 | Campo | Qué representa | Estado |
@@ -227,7 +243,7 @@ inventario, no ataque.
 ### `IP <n>` — riesgo por dirección **[real]**
 
 ```
-IP 98   45.156.87.93   2c · 1m · /24 100% · bloquearía en aviso 5
+IP 98   45.156.87.93   2c · 1m · /24 100% · bloquearía en aviso 5 · 2ª opinión: coincide
 ```
 
 Probabilidad que da el modelo a que **esa dirección** merezca bloqueo, según
@@ -237,6 +253,19 @@ hostil de su subred /24, y en qué aviso habría cortado.
 Aparece solo en alertas con IP de origen. En la muestra medida son el **22,6 %**
 de las alertas del panel; el resto (Trivy, syscheck, systemd) no tienen atacante
 al que puntuar. De las IPs que sí aparecen, la cobertura es del **100 %**.
+
+**El marcador final es la segunda opinión**, y admite tres textos:
+
+| Texto | Qué significa |
+|---|---|
+| `2ª opinión: coincide` | Los dos modelos opinan lo mismo, bloqueen o no |
+| `2ª opinión: discrepa` | Solo uno cruza su umbral |
+| `sin 2ª opinión (1er aviso)` | El segundo modelo **no puntúa el primer aviso** |
+
+El tercer caso no es un fallo ni un cero: es una decisión del paquete. El
+presupuesto K = 1 se excluyó a propósito porque su umbral no trasladaba de
+validación a test (la precisión caía a 0,976). Se dice en vez de callarlo,
+porque un hueco silencioso se lee como acuerdo.
 
 ### Etiqueta de explotación real **[externo]**
 
@@ -249,19 +278,59 @@ Tres estados: `EXPLOTADA EN LA VIDA REAL` (en el catálogo KEV de CISA),
 
 ---
 
-## 5. Los dos scores de IA — la distinción que más importa
+## 5. Los tres scores de IA — la distinción que más importa
 
-La aplicación muestra **dos números distintos** que responden a preguntas
-distintas. Confundirlos es el error más fácil de cometer al leer el panel.
+La aplicación muestra **tres números distintos**. Los dos primeros responden a
+**preguntas distintas**, y confundirlos es el error más fácil de cometer al leer
+el panel. El tercero responde a **la misma pregunta que el segundo**, con otro
+modelo: no es una señal nueva, es una segunda opinión.
 
-| | `AI <n>` (ventana) | `IP <n>` (dirección) |
-|---|---|---|
-| **Pregunta** | ¿Este minuto de este agente parece ataque? | ¿La conducta de esta IP justifica bloquearla? |
-| **Unidad** | 1 minuto × agente | Dirección IP |
-| **Modelo** | LAB-ALERTS (`models_examples/`) | EarlyBlockScorer (`deploy/argos_scorer/`) |
-| **Entradas** | 16 agregados del minuto | 22 variables de conducta de la IP |
-| **Usa campos del motor de reglas** | Sí (3 de 16) | **No, por diseño** |
-| **Valores distintos sobre 10.000 alertas** | **8–15** | **39–148** |
+| | `AI <n>` (ventana) | `IP <n>` (dirección) | 2ª opinión (atención) |
+|---|---|---|---|
+| **Pregunta** | ¿Este minuto de este agente parece ataque? | ¿La conducta de esta IP justifica bloquearla? | **La misma que `IP <n>`** |
+| **Unidad** | 1 minuto × agente | Dirección IP | Dirección IP |
+| **Modelo** | LAB-ALERTS (`models_examples/`) | EarlyBlockScorer, HistGradientBoosting | Transformer de atención, 2 bloques y 4 cabezas |
+| **Entradas** | 16 agregados del minuto | 22 variables de conducta de la IP | La **secuencia** de los primeros K avisos |
+| **Usa campos del motor de reglas** | Sí (3 de 16) | **No, por diseño** | **No, por diseño** |
+| **¿Decide?** | No, informa | **Sí** | **No: solo anota** |
+| **Validación externa** | Sí | Sí | **No** |
+
+### El tercer score: para qué sirve si empata
+
+Los dos modelos de IP **empatan** sobre tres semillas: recall 0,991 frente a
+0,990, precisión 0,991 frente a 0,993, AUC medio por K 0,957 frente a 0,952.
+El Transformer **no detecta mejor**, y la razón es interpretable: la etiqueta
+cuenta hechos —cuántas cuentas, cuántas máquinas— y no depende del orden en que
+ocurrieron, que es justo lo que un modelo de secuencia sabría aprovechar.
+
+Entonces, ¿por qué está? Por dos cosas que el modelo principal no puede dar:
+
+1. **Explicabilidad.** Dice **qué avisos pesaron** (`avisos_decisivos`, con su
+   peso de atención). El HistGradientBoosting da un número; este dice dónde
+   miró. En la ficha de detalle aparece como barras por aviso.
+2. **Una segunda opinión con otro sesgo inductivo.** Medir su acuerdo con el
+   modelo principal sobre tráfico real, semana a semana, es **la única
+   validación que le queda**: el presupuesto de validación externa de
+   LAB-ALERTS está gastado y no se puede volver a gastar.
+
+**Medido en vivo** sobre las 10.001 alertas cargadas: 8.951 llevan riesgo por IP
+(89,5 %), y de ellas 8.935 tienen segunda opinión; las 16 restantes son primeros
+avisos, donde el modelo no puntúa. Sobre **56 IPs distintas**, coinciden en
+**47 (84 %)** y discrepan en 9 (16 %): 7 donde solo bloquea el principal y 2
+donde solo bloquea el Transformer.
+
+> **Cifras del paquete, test interno, sin validación externa.** Política
+> secuencial: HGB recall 0,990 / precisión 0,995; atención 0,992 / 0,992;
+> consenso OR 0,995 / 0,990; consenso AND 0,985 / 0,997. Los cuatro cortan en
+> la mediana del 5.º aviso. **No** se puede decir que el Transformer sea mejor,
+> más preciso ni que generalice mejor.
+
+### Por qué el primer aviso no tiene segunda opinión
+
+El presupuesto K = 1 se **excluyó a propósito** del paquete: ahí el umbral no
+trasladaba de validación a test y la precisión caía a 0,976, por debajo del
+0,99 exigido. La interfaz lo declara —«sin 2ª opinión (1er aviso)»— en vez de
+mostrar un cero o callarlo, porque un hueco silencioso se lee como acuerdo.
 
 ### Por qué el `AI Score` sale casi siempre igual
 
@@ -743,6 +812,47 @@ siempre que se cite:
 Por eso nunca se muestra sola. El desglose que viene a continuación es
 obligatorio, no decorativo.
 
+### Selector de política y matriz de acuerdo
+
+**Qué es.** El simulacro es un **banco de pruebas**, así que permite elegir qué
+modelo decide dentro de él. Cuatro opciones:
+
+| Política | Quién decide | Test interno (recall / precisión) |
+|---|---|---|
+| **Principal (HGB)** — por defecto | El modelo que decide hoy | 0,990 / 0,995 |
+| **Transformer solo** | La segunda opinión, sola | 0,992 / 0,992 |
+| **Consenso OR** | Cualquiera que cruce su umbral | 0,995 / 0,990 |
+| **Consenso AND** | Solo si cruzan los dos | 0,985 / 0,997 |
+
+**Qué aporta, y qué NO cambia.** Cambiar esto **no cambia quién decide en la
+plataforma**: en la ingesta real bloquea siempre el modelo principal, que es el
+único con validación externa. El selector existe para poder ver el efecto de
+cada política antes de proponer ninguna, con la relación esperada: `AND` corta
+menos y más fino, `OR` corta más y admite más error.
+
+**La matriz de acuerdo** reparte las IPs con ≥ 2 avisos en cuatro casillas:
+ambos bloquearían, solo el principal, solo el Transformer, ninguno. Se evalúa
+en el mayor presupuesto común alcanzado por cada IP.
+
+Va con **desglose por agente destino**, como exige la convención. Aviso
+necesario: una IP que alcanza varias máquinas cuenta en cada fila, así que
+**las filas suman más que el total** — es un reparto, no una partición.
+
+Medido sobre una ventana de 6 h y 3.000 alertas (18 IPs con origen de red, 14
+evaluables):
+
+| Política | Bloqueos | ambos | solo principal | solo Transformer | ninguno |
+|---|---|---|---|---|---|
+| Principal | 9 | 7 | 1 | 1 | 5 |
+| Transformer | 10 | 6 | 0 | 4 | 5 |
+| OR | 10 | 5 | 2 | 3 | 5 |
+| AND | 9 | 9 | 0 | 1 | 5 |
+
+Cada veredicto muestra además sus **avisos decisivos enlazados** con la alerta
+concreta del lote reproducido (`aviso #5 → alerta 53`), para poder ir a
+mirarla. Con la política por defecto se anotan sobre el veredicto del HGB, que
+por sí solo no los produce.
+
 ### Desglose — por qué no basta el porcentaje
 
 Un agregado esconde concentración, así que se reparte siempre:
@@ -816,7 +926,7 @@ el panel no permite comprobar que el sistema distingue algo. Se identifica con
 | Ruta | Para qué |
 |---|---|
 | `GET /api/argos/live` | Alimenta el panel completo. |
-| `GET /api/argos/simulation` | Ejecuta el simulacro. `minutes`, `limit`, `source`. |
+| `GET /api/argos/simulation` | Ejecuta el simulacro. `minutes`, `limit`, `source`, `policy` (`hgb` por defecto, o `attention`, `or`, `and`). |
 | `GET /api/argos/dataset` | Exporta alertas en JSONL para análisis. `format=manifest` da solo el balance de clases. |
 | `POST /api/argos/mcp-chat` | Consulta en lenguaje natural sobre las herramientas MCP. |
 | `GET /api/argos/mcp-chat` | Sonda: qué motor va a responder y cuántas herramientas hay. |
@@ -932,6 +1042,7 @@ espera de 2 s en el CLI: `engine=keywords`,
 | Geolocalización | Puntos sintéticos indistinguibles | Marcados `(aprox.)` y separados en salud |
 | Fila `MCP Agents` | Permanentemente `planned` | Retirada |
 | Chat «MCP» | El nombre sugería una integración MCP que no existía | Integración MCP real: la web hace de host y consulta las siete herramientas |
+| Segunda opinión | No existía: un solo modelo decidía sin contraste | Transformer de atención en sombra, con acuerdo medible y avisos decisivos |
 
 ### Limitaciones que permanecen, por diseño o por alcance
 
@@ -946,6 +1057,7 @@ espera de 2 s en el CLI: `engine=keywords`,
 | Geolocalización aproximada | Sigue existiendo, pero ahora está declarada. |
 | Chat | El motor de suscripción depende de que el CLI de Claude Code esté instalado y con sesión iniciada; si se desinstala, cae a la API o a reglas. Lanza un agente local, así que el endpoint **no debe exponerse fuera de localhost**. |
 | `AI Score` de ventana | Satura y no distingue entre atacantes del mismo minuto. Se mantiene junto al riesgo por IP, que sí discrimina. |
+| Segunda opinión (Transformer) | **Sin validación externa.** Sus cifras son de test interno sobre la misma partición temporal que el modelo principal; el presupuesto de validación externa de LAB-ALERTS está gastado y no puede volver a gastarse. Por eso está en **modo sombra**: no decide, y medir su acuerdo en vivo es la única validación que le queda. Tampoco puntúa el primer aviso (K=1 excluido). |
 
 ## 12. Cómo levantarlo
 
