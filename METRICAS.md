@@ -295,6 +295,40 @@ modelo: no es una señal nueva, es una segunda opinión.
 | **¿Decide?** | No, informa | **Sí** | **No: solo anota** |
 | **Validación externa** | Sí | Sí | **No** |
 
+### Qué es el Transformer de atención, y por qué se probó
+
+**El concepto.** Un *Transformer* es una arquitectura de red neuronal que
+procesa una **secuencia** y, en cada posición, aprende **a qué otras posiciones
+mirar**. Ese mecanismo es la *atención*: en vez de resumir la secuencia en un
+agregado, decide qué elementos pesan para la salida. Es lo que hay debajo de
+los modelos de lenguaje actuales, aquí en una versión diminuta.
+
+**Por qué tenía sentido probarlo en este problema.** El modelo principal recibe
+**agregados** de la conducta de una IP: cuántas cuentas distintas probó,
+cuántas máquinas alcanzó, cada cuánto llegaron los avisos. Ese resumen
+**descarta el orden**. La hipótesis razonable era que el orden importa: no es
+lo mismo probar tres cuentas en la misma máquina que ir saltando de máquina en
+máquina. Un modelo de secuencia debería aprovechar eso.
+
+**Qué se midió.** Dos bloques, cuatro cabezas, dimensión 32, unos 18.369
+parámetros por presupuesto K, con la inferencia reescrita en **numpy puro**
+—sin PyTorch— y verificada contra el modelo entrenado con una diferencia máxima
+de 3,5·10⁻⁷. Cinco modelos, uno por K, que ocupan 414 KB en total.
+
+**El resultado fue un empate**, y eso también es un hallazgo. La explicación es
+interpretable y conviene decirla tal cual: **la etiqueta cuenta hechos, no
+secuencias**. Si lo que define «atacante» es cuántas cuentas probó y cuántas
+máquinas tocó, el orden en que lo hizo no añade información, y un modelo que
+sabe aprovechar el orden no tiene de dónde sacar ventaja.
+
+Es el mismo patrón que ya se había medido en el trabajo con otras dos
+arquitecturas: un autoencoder no supervisado (retirado) y una GRU sobre la
+secuencia de avisos, que empató en la cuarta cifra decimal (AUC 0,9702 frente a
+0,9703). **Con datos tabulares agregados a esta escala, el aprendizaje profundo
+no aportó ventaja medible en ninguna de las tres pruebas.** Los modelos que
+quedan en producción son árboles de gradiente: igual de buenos, 6,6 MB, sin GPU
+y con inferencia en microsegundos.
+
 ### El tercer score: para qué sirve si empata
 
 Los dos modelos de IP **empatan** sobre tres semillas: recall 0,991 frente a
@@ -913,6 +947,59 @@ avisos. Medido en una ejecución: **las 9 de 9 sin bloquear** no llegaron a los
 por tanto la tasa de bloqueo está sesgada a la baja y no debe leerse como
 precisión.
 
+### 7.1 Modo sombra — y por qué no es lo mismo que el simulacro
+
+**Qué es el modo sombra.** Es la práctica estándar antes de dar poder a un
+sistema automático: se le deja **decidir de verdad, sobre tráfico real y en
+tiempo real**, pero sus decisiones **no se ejecutan**. Se anotan. Después se
+revisa qué habría hecho, y solo si el registro convence se le da el control.
+
+Es la diferencia entre *«el modelo acierta en mis pruebas»* y *«el modelo
+acierta sobre lo que llega de verdad, y aquí está la lista de lo que habría
+hecho durante tres semanas»*. Lo segundo es lo que se puede defender.
+
+**Qué aporta aquí, y por qué hay dos cosas distintas que se confunden.** ARGOS
+tiene **dos mecanismos separados** que suenan parecido:
+
+| | Simulacro (`/simulacro`) | Ingesta en sombra |
+|---|---|---|
+| **Qué hace** | Reproduce un lote pasado | Procesa alertas según llegan |
+| **Estado** | **Efímero**, sembrado y descartado | **Persistente**, es el estado vivo |
+| **Repetible** | Sí, misma entrada → mismo resultado | No: el estado avanza |
+| **Deja rastro** | No | Sí, en el ledger |
+| **Para qué sirve** | Enseñar el mecanismo y comparar políticas | **Acumular la evidencia** para decidir si se promociona a bloqueo real |
+
+El simulacro es una demostración; la ingesta en sombra es el experimento. Solo
+el segundo produce el registro que justificaría activar el bloqueo automático.
+
+#### El ledger — el registro de decisiones **[real]**
+
+**Qué es.** Un fichero donde se anota, línea a línea, cada decisión de bloqueo
+tomada. Es la **única fuente de verdad** sobre a quién se ha decidido bloquear:
+el estado en memoria del sidecar es decisión *en curso* y no sobrevive a un
+reinicio.
+
+**Qué guarda cada línea:**
+
+| Campo | Qué es |
+|---|---|
+| `mode` | **Siempre `shadow`.** Es lo que marca que no se ejecutó nada. |
+| `action`, `score`, `threshold`, `decided_at_alert` | La decisión del **modelo principal**. |
+| `evidence` | Cuentas probadas, máquinas alcanzadas, reputación de la /24. |
+| `exclusion` | Si la IP cayó en la lista de infraestructura propia, con el motivo. |
+| `duplicate_of` | Si esa IP ya tenía decisión previa. **La primera vez gana**; una reemisión se anota pero no vuelve a actuar. |
+| `second_opinion` | La anotación del Transformer **en el momento de la decisión**. |
+
+Ese último campo es el que permite reconstruir la serie de acuerdo con el
+tiempo, que es la única validación que le queda al segundo modelo. El contador
+en memoria de `/health` sirve para mirar ahora; el ledger, para mirar atrás.
+
+**El criterio de promoción a bloqueo real** no es una tasa de acierto: es que
+el ledger muestre **cero veredictos sobre infraestructura propia** durante el
+periodo de sombra, y que esa lista de exclusiones esté declarada completa. Se
+afirma en positivo en la cabecera del simulacro, en vez de deducirse del
+silencio.
+
 ---
 
 ## 8. Modos de degradación
@@ -954,6 +1041,61 @@ el panel no permite comprobar que el sistema distingue algo. Se identifica con
 | `POST /api/argos/mcp-chat` | Consulta en lenguaje natural sobre las herramientas MCP. |
 | `GET /api/argos/mcp-chat` | Sonda: qué motor va a responder y cuántas herramientas hay. |
 | `GET /api/wazuh/*` | Acceso directo a agentes, manager y alertas. |
+
+### 10.1 Endpoints del sidecar (`127.0.0.1:8973`)
+
+**Qué es un sidecar.** Un proceso auxiliar que corre **al lado** de la
+aplicación principal, en la misma máquina, y le presta un servicio que sería
+caro montar dentro. Aquí presta uno concreto: mantener los modelos **cargados
+en memoria**. Sin él, la web tendría que lanzar un intérprete de Python y
+recargar los modelos en cada petición.
+
+**Qué aporta aquí.** Está medido: por subproceso, 9,34 s + 6,60 s **en cada
+refresco**; en el proceso vivo, 1,53 s + 2,36 s. Con el panel sondeando cada
+5 s, la diferencia es que las peticiones dejen de solaparse. Además es el
+**dueño único del estado**: el cursor de ingesta y la reputación de subredes
+viven ahí, y no podrían vivir en un proceso que muere tras cada petición.
+
+| Ruta | Método | Para qué |
+|---|---|---|
+| `/health` | GET | Estado, contadores y bloque de la segunda opinión. |
+| `/cursor` | GET | Por dónde va la ingesta y en qué generación de estado. |
+| `/ingest` | POST | Ingesta con decisión. Devuelve veredictos del modelo principal más las anotaciones de sombra. |
+| `/score` | POST | Puntúa alertas para el panel. Devuelve `argos`, `csr_lanl` e `ip_risk`. |
+| `/simulate` | POST | Reproduce un lote con un puntuador efímero. Acepta `policy`. |
+| `/window` | POST | Score de ventana de un agente. |
+
+> **Por qué `localhost:8973/ingest` no se abre en el navegador.** Escribir una
+> URL en la barra hace un `GET`, y esas cuatro rutas **solo aceptan `POST`**:
+> reciben lotes de alertas en el cuerpo de la petición. Un `GET` devuelve
+> `404 {"error": "ruta desconocida"}`. Las únicas abribles son `/health` y
+> `/cursor`. Y en el puerto **3000 no existen en absoluto**: son del sidecar,
+> no de la web.
+>
+> **El sidecar solo escucha en loopback, y eso es deliberado.** Arrancarlo con
+> `--host 0.0.0.0` **falla con código de salida 1**; es una de las
+> comprobaciones de `test_service.py`. No es una carencia: mantiene fuera de la
+> red un proceso que decide bloqueos.
+
+#### Lo que devuelve `/ingest`, y qué es decisión y qué no
+
+| Campo | Qué es | ¿Decide? |
+|---|---|---|
+| `verdicts` | Bloqueos del modelo principal | **Sí** |
+| `cursor`, `state_generation` | Punto de reanudación y versión del estado | — |
+| `accepted`, `duplicates`, `late_behind_cursor` | Contabilidad de la deduplicación | — |
+| `second_opinions` | Anotación del Transformer sobre cada aviso evaluado | **No** |
+| `attention_only` | IPs donde **solo** el Transformer cruzaría su umbral | **No: son discrepancias** |
+| `agreement` | Acuerdo acumulado desde que arrancó el proceso | **No** |
+
+La separación es el punto entero del diseño. `attention_only` es lo más fácil
+de malinterpretar: **no son bloqueos que se hayan hecho ni que se vayan a
+hacer**. Son casos donde los dos modelos no coinciden, y existen para poder
+medirlo, no para actuar.
+
+> El contador `agreement` de `/health` **vive en memoria y se pierde al
+> reiniciar** el sidecar. Para la serie larga hay que leer el ledger, que sí
+> guarda la anotación con cada decisión.
 
 ### El asistente conversacional
 
@@ -1096,11 +1238,35 @@ npx next build && npx next start -p 3000    # producción, 3-4x más rápido
 
 Si reinicias, **mata los procesos anteriores por PID**: los huérfanos siguen
 ocupando el puerto y el nuevo no llega a arrancar, con lo que seguirías viendo
-el código antiguo.
+el código antiguo. Ha pasado varias veces durante el desarrollo y el síntoma
+engaña: la aplicación responde, pero con el binario viejo.
+
+### Qué se puede abrir en el navegador
+
+| URL | Qué es |
+|---|---|
+| `http://localhost:3000` | El panel |
+| `http://localhost:3000/simulacro` | El simulacro |
+| `http://localhost:8973/health` | Estado del sidecar, con el bloque de la segunda opinión |
+| `http://localhost:8973/cursor` | Por dónde va la ingesta |
+
+**Nada más.** `/ingest`, `/score`, `/simulate` y `/window` solo aceptan `POST`
+y devuelven `404` a un navegador; en el puerto 3000 ni siquiera existen. Ver
+§ 10.1.
+
+### Comprobar que la segunda opinión está viva
+
+```bash
+curl http://localhost:8973/health        # -> attention.loaded: true, budgets [2,3,5,10,20]
+.venv/Scripts/python.exe deploy/argos_scorer/test_service.py   # 11 secciones
+```
 
 ---
 
-*Documento generado el 6 de septiembre de 2026 y actualizado tras corregir
-los elementos listados en la sección 11. Las cifras marcadas como
+*Documento generado el 6 de septiembre de 2026, actualizado tras corregir los
+elementos de la sección 11 y ampliado el 7 de septiembre con la segunda opinión
+del Transformer (secciones 3.1, 5, 7, 7.1, 10.1 y 11). Las cifras marcadas como
 medidas proceden de la exportación de 30 días (1.462.265 alertas) y de
-mediciones sobre el despliegue en vivo.*
+mediciones sobre el despliegue en vivo; las del test interno del paquete de
+modelos vienen del repositorio de investigación y están marcadas
+**[externo]**.*
