@@ -53,6 +53,18 @@ type Attack = {
     agentsReached: number;
     subnetHostileRatio: number;
     evidenceKind: string;
+    secondOpinion?:
+      | { available: false; reason: 'first_notice' | 'out_of_budget' }
+      | {
+          available: true;
+          score: number;
+          threshold: number;
+          fired: boolean;
+          agreement: 'both' | 'hgb_only' | 'attention_only' | 'none';
+          atAlert: number;
+          decisiveNotices: number[];
+          attentionPerNotice: number[];
+        };
   };
   vulnerability?: { cve: string; inKev: boolean; epss: number | null; actionable: boolean };
 };
@@ -101,6 +113,27 @@ async function live(): Promise<LiveData> {
   const data = await getJson<LiveData>(`${WEB_URL}/api/argos/live`);
   cached = { at: Date.now(), data };
   return data;
+}
+
+/**
+ * Segunda opinion del Transformer de atencion (R13). Se redacta aqui, y no se
+ * deja al modelo de lenguaje, para que las cautelas viajen siempre pegadas al
+ * dato: empata con el modelo principal, no tiene validacion externa, no decide
+ * y no puntua el primer aviso.
+ */
+function segundaOpinion(second: NonNullable<Attack['ipRisk']>['secondOpinion']): string {
+  if (!second) return '';
+  if (!second.available) {
+    return second.reason === 'first_notice'
+      ? 'Segunda opinion (Transformer): sin segunda opinion hasta el 2o aviso; ese modelo no puntua el primero.'
+      : 'Segunda opinion (Transformer): no disponible; el numero de avisos no es uno de sus presupuestos (2, 3, 5, 10, 20).';
+  }
+  const acuerdo = second.agreement === 'both' || second.agreement === 'none' ? 'coincide' : 'discrepa';
+  return [
+    `Segunda opinion (Transformer): ${(second.score * 100).toFixed(0)} sobre 100, ${acuerdo} con el modelo principal.`,
+    `  avisos decisivos: ${second.decisiveNotices.join(', ') || '-'} (evaluado en K=${second.atAlert})`,
+    '  Anotacion en sombra: no decide, empata con el modelo principal en test interno y no tiene validacion externa.',
+  ].join('\n');
 }
 
 function modeNote(data: LiveData): string {
@@ -253,7 +286,11 @@ server.registerTool(
           `  tipo de evidencia dominante: ${risk.evidenceKind}`,
           '',
           `Alertas en la ventana cargada: ${matches.length}, contra ${agents.join(', ')}.`,
-        ].join('\n') + modeNote(data)
+          '',
+          segundaOpinion(risk.secondOpinion),
+        ]
+          .filter(Boolean)
+          .join('\n') + modeNote(data)
       );
     } catch (error) {
       return fail(`Error consultando la IP: ${error instanceof Error ? error.message : String(error)}`);
@@ -373,12 +410,18 @@ server.registerTool(
         .describe('Ventana temporal a reproducir, en minutos'),
       limite: z.number().int().min(100).max(10000).default(3000)
         .describe('Maximo de alertas a reproducir'),
+      politica: z.enum(['hgb', 'attention', 'or', 'and']).default('hgb')
+        .describe(
+          'Que modelo decide DENTRO del simulacro. "hgb" es el modelo principal y el unico ' +
+          'con validacion externa; "attention" es el Transformer de segunda opinion; "or" y ' +
+          '"and" son consensos. Cambiarlo aqui no cambia quien decide en la plataforma real.'
+        ),
     },
   },
-  async ({ minutos, limite }) => {
+  async ({ minutos, limite, politica }) => {
     try {
       const r = await getJson<any>(
-        `${WEB_URL}/api/argos/simulation?minutes=${minutos}&limit=${limite}`
+        `${WEB_URL}/api/argos/simulation?minutes=${minutos}&limit=${limite}&policy=${politica}`
       );
       if (!r.ok) return fail(`El simulacro fallo en la fase '${r.stage}': ${r.error}`);
 
@@ -411,6 +454,23 @@ server.registerTool(
           '',
           `Sesgo de ventana: ${s.censoring.censored} de ${s.censoring.unblocked} IPs sin bloquear no llegaron a ` +
             `${s.censoring.last_budget} avisos, asi que no puede afirmarse que sean benignas.`,
+          '',
+          `Decidio: ${r.policy === 'hgb' ? 'el modelo principal (HGB)' :
+            r.policy === 'attention' ? 'el Transformer solo' : `consenso ${r.policy.toUpperCase()}`}.`,
+          s.agreement && s.agreement.evaluated_ips > 0
+            ? [
+                `Acuerdo entre los dos modelos sobre ${s.agreement.evaluated_ips} IPs con 2 o mas avisos:`,
+                `  ambos bloquearian    : ${s.agreement.matrix.both}`,
+                `  solo el principal    : ${s.agreement.matrix.hgb_only}`,
+                `  solo el Transformer  : ${s.agreement.matrix.attention_only}`,
+                `  ninguno              : ${s.agreement.matrix.none}`,
+                `  desglose por agente destino: ${Object.entries(s.agreement.by_agent ?? {})
+                  .map(([agente, fila]: [string, any]) =>
+                    `${agente} (${fila.both} ambos, ${fila.hgb_only} solo principal, ${fila.attention_only} solo Transformer)`)
+                  .join('; ') || 'sin datos'}`,
+                '  Una IP que alcanza varias maquinas cuenta en cada una: las filas suman mas que el total.',
+              ].join('\n')
+            : 'Ninguna IP alcanzo dos avisos: el Transformer no llega a opinar en esta ventana.',
           '',
           excluidos.length === 0
             ? `Ningun veredicto sobre infraestructura propia (${r.exclusions.confirmedRules} reglas comprobadas).`
@@ -447,6 +507,17 @@ server.registerTool(
           `  eventos deduplicados en memoria: ${h.lru_size}`,
           '',
           `Contadores: ${JSON.stringify(h.counters)}`,
+          '',
+          h.attention?.loaded
+            ? [
+                'Segunda opinion (Transformer de atencion): CARGADA',
+                `  presupuestos: K = ${h.attention.budgets.join(', ')} (K=1 excluido a proposito)`,
+                `  ${h.attention.n_models} modelos, ${h.attention.n_params_por_modelo} parametros cada uno, inferencia en numpy`,
+                `  papel: ${h.attention.role}`,
+                `  validacion: ${h.attention.validacion}`,
+                `  acuerdo acumulado con el modelo principal: ${JSON.stringify(h.attention.agreement)}`,
+              ].join('\n')
+            : 'Segunda opinion (Transformer): NO cargada. El modelo principal decide igual.',
         ].join('\n')
       );
     } catch {

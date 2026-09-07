@@ -97,6 +97,7 @@ const SYSTEM_PROMPT = [
   '5. La severidad CRITICAL del panel viene casi toda de hallazgos de vulnerabilidades del escaner (Trivy), no de ataques en curso; mientras tanto la fuerza bruta real vive en LOW. No equipares severidad alta con ataque activo.',
   '6. El bloque CSR-LANL es una capa experimental fuera de su dominio: su adaptador rellena con ceros las familias de datos que Wazuh no produce. Si aparece, adviertelo y no lo uses como evidencia.',
   '7. Los porcentajes agregados del simulacro suelen venir de unas pocas IPs muy ruidosas. Si citas uno, cita tambien el desglose de concentracion que devuelve la herramienta.',
+  '8. El Transformer de atencion es una SEGUNDA OPINION en modo sombra: NO decide, el bloqueo lo decide siempre el modelo principal. En test interno EMPATA con el; no digas que detecta mejor, que es mas preciso ni que generaliza mejor. No tiene validacion externa. No puntua el primer aviso: ahi di que no hay segunda opinion, nunca que vale cero. Lo unico que aporta de nuevo es que avisos pesaron.',
 ].join('\n');
 
 type ToolTrace = { name: string; args: Record<string, unknown>; ms: number; chars: number; isError: boolean };
