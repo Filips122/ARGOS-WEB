@@ -195,10 +195,10 @@ la alerta.
 
 | Campo | Qué es | Qué aporta aquí |
 |---|---|---|
-| **Score** | Salida del Transformer, 0–100 | Responde a la misma pregunta que `IP <n>`: ¿merece bloqueo esta dirección? |
-| **Umbral (K=n)** | Umbral del presupuesto en que se evaluó | Fijado a precisión ≥ 0,99 en validación. Hay uno por K |
-| **Cruza umbral** | Si dispararía | Comparado con el principal da el acuerdo de la cabecera |
-| **Avisos decisivos** | Los tres avisos con más peso de atención, en barras | **Lo único que el modelo principal no puede dar.** Dice dónde miró |
+| **Score** **[real]** | Salida del Transformer, 0–100 | Responde a la misma pregunta que `IP <n>`: ¿merece bloqueo esta dirección? |
+| **Umbral (K=n)** **[fijo]** | Umbral del presupuesto en que se evaluó | Fijado a precisión ≥ 0,99 en validación. Hay uno por K |
+| **Cruza umbral** **[derivado]** | Si dispararía | Comparado con el principal da el acuerdo de la cabecera |
+| **Avisos decisivos** **[real]** | Los tres avisos con más peso de atención, en barras | **Lo único que el modelo principal no puede dar.** Dice dónde miró |
 
 La cabecera marca `coincide` o `discrepa`, y el pie repite que es test interno
 sin validación externa y que **el bloqueo lo decide el modelo principal**.
@@ -256,11 +256,11 @@ al que puntuar. De las IPs que sí aparecen, la cobertura es del **100 %**.
 
 **El marcador final es la segunda opinión**, y admite tres textos:
 
-| Texto | Qué significa |
-|---|---|
-| `2ª opinión: coincide` | Los dos modelos opinan lo mismo, bloqueen o no |
-| `2ª opinión: discrepa` | Solo uno cruza su umbral |
-| `sin 2ª opinión (1er aviso)` | El segundo modelo **no puntúa el primer aviso** |
+| Texto | Origen | Qué significa |
+|---|---|---|
+| `2ª opinión: coincide` | **[derivado]** | Los dos modelos opinan lo mismo, bloqueen o no |
+| `2ª opinión: discrepa` | **[derivado]** | Solo uno cruza su umbral |
+| `sin 2ª opinión (1er aviso)` | **[fijo]** | El segundo modelo **no puntúa el primer aviso** |
 
 El tercer caso no es un fallo ni un cero: es una decisión del paquete. El
 presupuesto K = 1 se excluyó a propósito porque su umbral no trasladaba de
@@ -313,13 +313,36 @@ Entonces, ¿por qué está? Por dos cosas que el modelo principal no puede dar:
    validación que le queda**: el presupuesto de validación externa de
    LAB-ALERTS está gastado y no se puede volver a gastar.
 
-**Medido en vivo** sobre las 10.001 alertas cargadas: 8.951 llevan riesgo por IP
-(89,5 %), y de ellas 8.935 tienen segunda opinión; las 16 restantes son primeros
-avisos, donde el modelo no puntúa. Sobre **56 IPs distintas**, coinciden en
-**47 (84 %)** y discrepan en 9 (16 %): 7 donde solo bloquea el principal y 2
-donde solo bloquea el Transformer.
+#### Acuerdo medido en vivo **[real]**
 
-> **Cifras del paquete, test interno, sin validación externa.** Política
+Sobre las 10.001 alertas cargadas en un refresco:
+
+| Métrica | Origen | Valor |
+|---|---|---|
+| Alertas con riesgo por IP | **[real]** | 8.951 (89,5 %) |
+| De ellas, con segunda opinión | **[real]** | 8.935 |
+| Sin segunda opinión, por ser primer aviso | **[real]** | 16 |
+| IPs distintas evaluadas | **[real]** | 56 |
+| Coinciden los dos modelos | **[derivado]** | 47 (84 %) |
+| Discrepan | **[derivado]** | 9 (16 %): 7 solo el principal, 2 solo el Transformer |
+
+Ese 84 % es **la métrica que justifica todo este servicio**: es la única forma
+que queda de contrastar el Transformer fuera del laboratorio, porque el
+presupuesto de validación externa está gastado. Sube o baja con el tráfico, así
+que hay que leerlo como una serie que se vigila, no como un resultado cerrado.
+
+#### Coste medido **[real]**
+
+Contra la versión anterior del sidecar, mismo banco de pruebas:
+
+| Ruta | Antes | Después | Por qué |
+|---|---|---|---|
+| `/ingest`, 300 eventos | 1.504,8 ms | 1.467,8 ms | Dentro del ruido: la atención solo corre en 5 presupuestos y son 18.369 parámetros en numpy |
+| `/score`, 300 alertas | 401,7 ms | 438,4 ms | **+9,1 %.** Real y explicado: `/score` llama a `ip_risk`, que ahora calcula una segunda opinión por IP |
+| `/simulate`, 400 alertas | 125,3 ms | 131,1 ms | +4,6 %, la matriz de acuerdo |
+| `/window` | 18,2 ms | 17,4 ms | Sin cambio: la atención no interviene |
+
+> **[externo]** · **Cifras del paquete, test interno, sin validación externa.** Política
 > secuencial: HGB recall 0,990 / precisión 0,995; atención 0,992 / 0,992;
 > consenso OR 0,995 / 0,990; consenso AND 0,985 / 0,997. Los cuatro cortan en
 > la mediana del 5.º aviso. **No** se puede decir que el Transformer sea mejor,
@@ -817,7 +840,7 @@ obligatorio, no decorativo.
 **Qué es.** El simulacro es un **banco de pruebas**, así que permite elegir qué
 modelo decide dentro de él. Cuatro opciones:
 
-| Política | Quién decide | Test interno (recall / precisión) |
+| Política | Quién decide | Test interno (recall / precisión) **[externo]** |
 |---|---|---|
 | **Principal (HGB)** — por defecto | El modelo que decide hoy | 0,990 / 0,995 |
 | **Transformer solo** | La segunda opinión, sola | 0,992 / 0,992 |
@@ -838,8 +861,8 @@ Va con **desglose por agente destino**, como exige la convención. Aviso
 necesario: una IP que alcanza varias máquinas cuenta en cada fila, así que
 **las filas suman más que el total** — es un reparto, no una partición.
 
-Medido sobre una ventana de 6 h y 3.000 alertas (18 IPs con origen de red, 14
-evaluables):
+Medido **[real]** sobre una ventana de 6 h y 3.000 alertas (18 IPs con origen
+de red, 14 evaluables):
 
 | Política | Bloqueos | ambos | solo principal | solo Transformer | ninguno |
 |---|---|---|---|---|---|
