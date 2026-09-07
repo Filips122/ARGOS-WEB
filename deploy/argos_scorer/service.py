@@ -698,6 +698,21 @@ class ScorerService:
             verdict["prevented_alerts"] = seen_after.get(verdict["ip"], 0)
             verdict["margin"] = round(verdict["score"] - verdict["threshold"], 4)
             verdict["evidence_kind"] = classify_evidence(verdict["evidence"])
+
+            # Con la politica por defecto decide el HGB, cuya evidencia no trae
+            # avisos decisivos: es justo lo que ese modelo no puede dar. Se
+            # anaden aqui como anotacion de la sombra, sin tocar la decision.
+            profile = sim.profiles.get(verdict["ip"])
+            if profile is not None:
+                verdict["second_opinion"] = self._second_opinion(
+                    profile, verdict["decided_at_alert"], hgb_fired=True
+                )
+                if "avisos_decisivos" not in (verdict.get("evidence") or {}):
+                    second = verdict["second_opinion"]
+                    if second.get("available"):
+                        verdict["evidence"]["avisos_decisivos"] = second["avisos_decisivos"]
+                        verdict["evidence"]["atencion_por_aviso"] = second["atencion_por_aviso"]
+
             # Enlaza los avisos decisivos con las alertas reproducidas: el
             # aviso i de una IP es su i-esima alerta en este lote.
             decisive = (verdict.get("evidence") or {}).get("avisos_decisivos")

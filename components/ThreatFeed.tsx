@@ -69,6 +69,24 @@ const KIND_TEXT: Record<NonNullable<Attack['ipRisk']>['evidenceKind'], string> =
  * merezca bloqueo, según lo que ha hecho. Va junto al AI Score de ventana, que
  * puntúa el minuto del agente y reparte el mismo número entre todas sus alertas.
  */
+/**
+ * Marcador de acuerdo con el segundo modelo. Es una anotacion en sombra: el
+ * bloqueo lo decide el HGB, aqui solo se dice si el Transformer opina lo mismo.
+ * En el primer aviso no opina —K=1 esta excluido del paquete— y se declara,
+ * porque callarlo o pintar un 0 seria peor que decir que no hay dato.
+ */
+function secondOpinionLabel(second: NonNullable<Attack['ipRisk']>['secondOpinion']): string {
+  if (!second) return '';
+  if (!second.available) {
+    return second.reason === 'first_notice'
+      ? ' · sin 2ª opinión (1er aviso)'
+      : ' · sin 2ª opinión (fuera de presupuesto)';
+  }
+  return second.agreement === 'both' || second.agreement === 'none'
+    ? ' · 2ª opinión: coincide'
+    : ' · 2ª opinión: discrepa';
+}
+
 function IpRiskTag({ risk, ip }: { risk: NonNullable<Attack['ipRisk']>; ip?: string }) {
   const level = risk.score >= 0.9 ? 'alto' : risk.score >= 0.6 ? 'medio' : 'bajo';
   return (
@@ -78,6 +96,7 @@ function IpRiskTag({ risk, ip }: { risk: NonNullable<Attack['ipRisk']>; ip?: str
       <small>
         {risk.usersTried}c · {risk.agentsReached}m · /24 {(risk.subnetHostileRatio * 100).toFixed(0)}%
         {risk.blocked ? ` · bloquearía en aviso ${risk.decidedAtAlert}` : ` · ${KIND_TEXT[risk.evidenceKind]}`}
+        {secondOpinionLabel(risk.secondOpinion)}
       </small>
     </div>
   );

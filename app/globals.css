@@ -1062,3 +1062,108 @@ button.wazuhAlertRow:hover {
 .ipRiskTag.alto { color: var(--red); background: rgba(255, 47, 95, 0.1); }
 .ipRiskTag.medio { color: var(--orange); background: rgba(255, 138, 61, 0.08); }
 .ipRiskTag.bajo { color: var(--green); background: rgba(72, 255, 155, 0.06); }
+
+/* Segunda opinion del Transformer en la ficha de detalle. Va DEBAJO de la
+   rejilla, separada, para que se lea como anotacion y no como un campo mas de
+   la alerta: no decide nada. */
+.secondOpinion {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(126, 168, 184, 0.18);
+  display: grid;
+  gap: 8px;
+}
+.secondOpinion header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.secondOpinion header span {
+  color: rgba(126, 168, 184, 0.7);
+  font-size: 0.6rem;
+  letter-spacing: 0.14em;
+}
+.secondOpinion header b {
+  color: #d9f6fb;
+  font-size: 0.72rem;
+}
+.secondOpinion header em {
+  margin-left: auto;
+  font-style: normal;
+  font-size: 0.62rem;
+  padding: 1px 6px;
+  border: 1px solid currentColor;
+}
+.secondOpinion header em.ok { color: #38f8d4; }
+.secondOpinion header em.diff { color: #ffd166; }
+.secondOpinionEmpty,
+.secondOpinionNote {
+  margin: 0;
+  color: rgba(126, 168, 184, 0.75);
+  font-size: 0.64rem;
+  line-height: 1.35;
+}
+.secondOpinionNotices {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 3px;
+}
+.secondOpinionNotices li {
+  display: grid;
+  grid-template-columns: 62px minmax(0, 1fr) 38px;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.64rem;
+  color: rgba(217, 246, 251, 0.85);
+}
+.secondOpinionBar {
+  height: 5px;
+  background: rgba(126, 168, 184, 0.16);
+}
+.secondOpinionBar i {
+  display: block;
+  height: 100%;
+  background: #38f8d4;
+}
+.secondOpinionNotices li b {
+  text-align: right;
+  color: rgba(126, 168, 184, 0.85);
+}
+
+/* Matriz de acuerdo del simulacro. */
+.simAgreeSub {
+  margin-top: 10px !important;
+}
+.simAgreeNote {
+  margin: 10px 0 0;
+  color: rgba(126, 168, 184, 0.72);
+  font-size: 0.64rem;
+  line-height: 1.4;
+}
+.simAgreeNote b { color: #ffd166; }
+
+/* Avisos decisivos de un veredicto, enlazados con la alerta reproducida. */
+.simDecisive {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed rgba(126, 168, 184, 0.16);
+  font-size: 0.62rem;
+  color: rgba(126, 168, 184, 0.7);
+}
+.simDecisive b {
+  padding: 1px 5px;
+  border: 1px solid rgba(56, 248, 212, 0.3);
+  color: #38f8d4;
+  font-weight: 500;
+}
+.simDecisive b i {
+  font-style: normal;
+  margin-left: 4px;
+  color: rgba(126, 168, 184, 0.75);
+}

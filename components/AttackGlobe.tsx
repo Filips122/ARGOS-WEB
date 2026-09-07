@@ -663,7 +663,71 @@ function AttackDetailCard({
         <div><dt>MCP tool</dt><dd>{attack.mcpTool}</dd></div>
         <div><dt>Sensores</dt><dd>{attack.sensorSources.join(' / ')}</dd></div>
       </dl>
+      {attack.ipRisk?.secondOpinion && <SecondOpinionBlock second={attack.ipRisk.secondOpinion} />}
     </article>
+  );
+}
+
+/**
+ * Segunda opinion del Transformer de atencion sobre la misma pregunta que
+ * responde `IP <n>`: si esa direccion merece bloqueo. NO decide: el veredicto
+ * es siempre del HGB, que es el unico modelo con validacion externa.
+ *
+ * Lo que aporta y el HGB no puede dar es la ultima fila: que avisos pesaron.
+ */
+function SecondOpinionBlock({ second }: { second: NonNullable<Attack['ipRisk']>['secondOpinion'] }) {
+  if (!second) return null;
+
+  if (!second.available) {
+    return (
+      <div className="secondOpinion">
+        <header>
+          <span>SEGUNDA OPINIÓN</span>
+          <b>Transformer de atención</b>
+        </header>
+        <p className="secondOpinionEmpty">
+          {second.reason === 'first_notice'
+            ? 'Sin segunda opinión hasta el 2º aviso: el modelo no puntúa el primero.'
+            : 'Sin segunda opinión: el número de avisos no es uno de sus presupuestos (2, 3, 5, 10, 20).'}
+        </p>
+      </div>
+    );
+  }
+
+  const agrees = second.agreement === 'both' || second.agreement === 'none';
+  const total = second.attentionPerNotice.reduce((sum, value) => sum + value, 0) || 1;
+
+  return (
+    <div className="secondOpinion">
+      <header>
+        <span>SEGUNDA OPINIÓN</span>
+        <b>Transformer de atención</b>
+        <em className={agrees ? 'ok' : 'diff'}>{agrees ? 'coincide' : 'discrepa'}</em>
+      </header>
+      <dl className="attackDetailGrid">
+        <div><dt>Score</dt><dd>{Math.round(second.score * 100)}%</dd></div>
+        <div><dt>Umbral (K={second.atAlert})</dt><dd>{Math.round(second.threshold * 100)}%</dd></div>
+        <div><dt>Cruza umbral</dt><dd>{second.fired ? 'sí' : 'no'}</dd></div>
+      </dl>
+      {second.decisiveNotices.length > 0 && (
+        <ul className="secondOpinionNotices">
+          {second.decisiveNotices.map((notice) => (
+            <li key={notice}>
+              <span>aviso {notice}</span>
+              <div className="secondOpinionBar">
+                <i style={{ width: `${Math.round(((second.attentionPerNotice[notice - 1] ?? 0) / total) * 100)}%` }} />
+              </div>
+              <b>{Math.round((second.attentionPerNotice[notice - 1] ?? 0) * 100)}%</b>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="secondOpinionNote">
+        Test interno, sin validación externa. Empata con el modelo principal: no detecta mejor,
+        aporta otro sesgo inductivo y dice qué avisos pesaron. El bloqueo lo decide el modelo
+        principal.
+      </p>
+    </div>
   );
 }
 

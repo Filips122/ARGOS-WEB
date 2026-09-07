@@ -10,6 +10,25 @@ const SIDECAR = process.env.ARGOS_SCORER_URL ?? 'http://127.0.0.1:8973';
 
 export type EvidenceKind = 'enumeracion' | 'lateral' | 'reputacion' | 'volumen';
 
+/**
+ * Quien decide DENTRO del simulacro, que es un banco de pruebas. 'hgb' es el
+ * modelo principal y el unico con validacion externa; cambiar esto aqui no
+ * cambia quien decide en la ingesta real, que siempre es el HGB.
+ */
+export type SimPolicy = 'hgb' | 'attention' | 'or' | 'and';
+
+export type AgreementCell = 'both' | 'hgb_only' | 'attention_only' | 'none';
+
+export type AgreementReport = {
+  matrix: Record<AgreementCell, number>;
+  evaluated_ips: number;
+  budgets: number[];
+  /** Desglose obligatorio. Una IP que alcanza varias maquinas cuenta en cada una. */
+  by_agent: Record<string, Record<AgreementCell, number>>;
+  disagreements: { ip: string; at_budget: number; agreement: AgreementCell; hgb: number; attention: number }[];
+  note: string;
+};
+
 type SimVerdict = {
   ip: string;
   score: number;
@@ -25,7 +44,11 @@ type SimVerdict = {
     maquinas_alcanzadas: number;
     avisos: number;
     reputacion_subred_24: number;
+    avisos_decisivos?: number[];
+    atencion_por_aviso?: number[];
   };
+  /** Avisos que mas pesaron, enlazados con su alerta en el lote reproducido. */
+  avisos_decisivos?: { aviso: number; alert_index: number | null }[];
 };
 
 type SimResponse = {
@@ -48,6 +71,8 @@ type SimResponse = {
   evidence_kinds: Record<string, number>;
   censoring: { unblocked: number; censored: number; last_budget: number; note: string };
   verdicts: SimVerdict[];
+  policy: SimPolicy;
+  agreement: AgreementReport;
 };
 
 export type SimulationPayload = {
@@ -57,6 +82,7 @@ export type SimulationPayload = {
   range: { from: string; to: string } | null;
   /** El fichero de 30 dias es el periodo de entrenamiento del paquete. */
   illustrativeOnly: boolean;
+  policy: SimPolicy;
   stats: Omit<SimResponse, 'verdicts'>;
   verdicts: (SimVerdict & {
     excluded: boolean;
@@ -78,14 +104,14 @@ function reason(error: unknown) {
   return error instanceof Error ? error.message : 'Error desconocido';
 }
 
-async function simulate(alerts: ScorerAlert[]): Promise<SimResponse> {
+async function simulate(alerts: ScorerAlert[], policy: SimPolicy): Promise<SimResponse> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 120_000);
   try {
     const response = await fetch(`${SIDECAR}/simulate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ alerts }),
+      body: JSON.stringify({ alerts, policy }),
       signal: controller.signal,
     });
     if (!response.ok) {
@@ -103,6 +129,9 @@ export async function GET(request: Request) {
   const limit = Number(params.get('limit') ?? 3000);
   const preferParam = params.get('source');
   const prefer = preferParam === 'live' || preferParam === 'file' ? preferParam : 'auto';
+  const policyParam = params.get('policy');
+  const policy: SimPolicy =
+    policyParam === 'attention' || policyParam === 'or' || policyParam === 'and' ? policyParam : 'hgb';
 
   let batch;
   try {
@@ -120,7 +149,7 @@ export async function GET(request: Request) {
 
   let result: SimResponse;
   try {
-    result = await simulate(batch.alerts);
+    result = await simulate(batch.alerts, policy);
   } catch (error) {
     return NextResponse.json(
       {
@@ -142,6 +171,13 @@ export async function GET(request: Request) {
   result.margins ??= { min: null, median: null, tight_count: 0, tight_threshold: 0.05 };
   result.evidence_kinds ??= {};
   result.censoring ??= { unblocked: 0, censored: 0, last_budget: 20, note: '' };
+  // Un sidecar sin el Transformer no devuelve nada de esto.
+  result.policy ??= policy;
+  result.agreement ??= {
+    matrix: { both: 0, hgb_only: 0, attention_only: 0, none: 0 },
+    evaluated_ips: 0, budgets: [], by_agent: {}, disagreements: [],
+    note: 'Sidecar sin segunda opinion.',
+  };
   for (const verdict of result.verdicts) {
     verdict.margin ??= Number((verdict.score - verdict.threshold).toFixed(4));
     verdict.evidence_kind ??= 'volumen';
@@ -156,6 +192,7 @@ export async function GET(request: Request) {
     fallbackReason: batch.fallbackReason,
     range: batch.range,
     illustrativeOnly: batch.source === 'file',
+    policy,
     stats,
     verdicts: verdicts.map((verdict) => {
       const hit = exclusions.match(verdict.ip);

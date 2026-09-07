@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 type EvidenceKind = 'enumeracion' | 'lateral' | 'reputacion' | 'volumen';
 
 type Verdict = {
+  avisos_decisivos?: { aviso: number; alert_index: number | null }[];
   ip: string;
   score: number;
   threshold: number;
@@ -51,12 +52,51 @@ type Payload = {
     margins: { min: number | null; median: number | null; tight_count: number; tight_threshold: number };
     evidence_kinds: Record<string, number>;
     censoring: { unblocked: number; censored: number; last_budget: number; note: string };
+    agreement: AgreementReport;
   };
+  policy: SimPolicy;
   verdicts: Verdict[];
   exclusions: { summary: string; complete: boolean; confirmedRules: number; candidateRules: number; hits: number };
 };
 
 type Failure = { ok: false; stage: string; error: string; hint?: string };
+
+type SimPolicy = 'hgb' | 'attention' | 'or' | 'and';
+type AgreementCell = 'both' | 'hgb_only' | 'attention_only' | 'none';
+type AgreementReport = {
+  matrix: Record<AgreementCell, number>;
+  evaluated_ips: number;
+  budgets: number[];
+  by_agent: Record<string, Record<AgreementCell, number>>;
+  disagreements: { ip: string; at_budget: number; agreement: AgreementCell; hgb: number; attention: number }[];
+  note: string;
+};
+
+/**
+ * Que modelo decide DENTRO del simulacro. Es un banco de pruebas: cambiarlo
+ * aqui no cambia quien decide en la ingesta real, que es siempre el HGB, el
+ * unico con validacion externa.
+ */
+const POLICY_LABEL: Record<SimPolicy, string> = {
+  hgb: 'Principal (HGB)',
+  attention: 'Transformer solo',
+  or: 'Consenso OR',
+  and: 'Consenso AND',
+};
+
+const POLICY_HINT: Record<SimPolicy, string> = {
+  hgb: 'El modelo que decide hoy. Es el único con validación externa.',
+  attention: 'Segunda opinión sola. Empata con el principal en test interno.',
+  or: 'Bloquea si cualquiera cruza su umbral: más cobertura, menos precisión.',
+  and: 'Bloquea solo si ambos cruzan: más precisión, menos cobertura.',
+};
+
+const AGREEMENT_LABEL: Record<AgreementCell, string> = {
+  both: 'Ambos bloquearían',
+  hgb_only: 'Solo el principal',
+  attention_only: 'Solo el Transformer',
+  none: 'Ninguno',
+};
 
 const SPEEDS = [1, 5, 20, 100] as const;
 
@@ -83,6 +123,7 @@ export function SimulationConsole() {
   const [minutes, setMinutes] = useState(60);
   const [limit, setLimit] = useState(10000);
   const [order, setOrder] = useState<'cronologico' | 'impacto'>('cronologico');
+  const [policy, setPolicy] = useState<SimPolicy>('hgb');
   const [data, setData] = useState<Payload | null>(null);
   const [failure, setFailure] = useState<Failure | null>(null);
   const [loading, setLoading] = useState(false);
@@ -100,7 +141,10 @@ export function SimulationConsole() {
     setPlaying(false);
 
     try {
-      const response = await fetch(`/api/argos/simulation?minutes=${minutes}&limit=${limit}`, { cache: 'no-store' });
+      const response = await fetch(
+        `/api/argos/simulation?minutes=${minutes}&limit=${limit}&policy=${policy}`,
+        { cache: 'no-store' }
+      );
       const json = (await response.json()) as Payload | Failure;
       if (!json.ok) setFailure(json);
       else {
@@ -112,7 +156,7 @@ export function SimulationConsole() {
     } finally {
       setLoading(false);
     }
-  }, [minutes, limit]);
+  }, [minutes, limit, policy]);
 
   const verdicts = data?.verdicts ?? [];
 
@@ -174,6 +218,19 @@ export function SimulationConsole() {
               <option value={3000}>3.000</option>
               <option value={6000}>6.000</option>
               <option value={10000}>10.000</option>
+            </select>
+          </label>
+          <label>
+            <span>Decide</span>
+            <select
+              value={policy}
+              onChange={(event) => setPolicy(event.target.value as SimPolicy)}
+              disabled={loading}
+              title={POLICY_HINT[policy]}
+            >
+              {(Object.keys(POLICY_LABEL) as SimPolicy[]).map((item) => (
+                <option key={item} value={item}>{POLICY_LABEL[item]}</option>
+              ))}
             </select>
           </label>
           <button type="button" className="simRun" onClick={run} disabled={loading}>
@@ -292,6 +349,84 @@ export function SimulationConsole() {
             </div>
 
             <div className="simBreakCard">
+              <p className="eyebrow">ACUERDO ENTRE LOS DOS MODELOS</p>
+              <p className="simBreakLede">
+                {stats.agreement.evaluated_ips > 0 ? (
+                  <>
+                    Sobre {num(stats.agreement.evaluated_ips)} IPs con 2 o más avisos, que es donde el
+                    Transformer opina. Presupuestos {stats.agreement.budgets.join(', ')}.
+                  </>
+                ) : (
+                  'Ninguna IP alcanzó dos avisos en esta ventana: el Transformer no llega a opinar.'
+                )}
+              </p>
+              {(Object.keys(AGREEMENT_LABEL) as AgreementCell[]).map((cell) => {
+                const value = stats.agreement.matrix[cell] ?? 0;
+                const total = stats.agreement.evaluated_ips || 1;
+                return (
+                  <div className="simBreakRow" key={cell}>
+                    <b>{num(value)}</b>
+                    <span>
+                      {AGREEMENT_LABEL[cell]} · {((value / total) * 100).toFixed(0)} %
+                    </span>
+                  </div>
+                );
+              })}
+
+              {/* La convencion obliga a desglosar todo agregado. Una IP que
+                  alcanza varias maquinas cuenta en cada una, asi que las filas
+                  suman mas que el total: es un reparto, no una particion. */}
+              {Object.keys(stats.agreement.by_agent).length > 0 && (
+                <>
+                  <p className="simBreakLede simAgreeSub">
+                    Por agente destino. Una IP que alcanza varias máquinas cuenta en cada una, así que
+                    las filas suman más que el total.
+                  </p>
+                  <ol className="simTop">
+                    {Object.entries(stats.agreement.by_agent)
+                      .sort((a, b) => {
+                        const sum = (row: Record<AgreementCell, number>) =>
+                          row.both + row.hgb_only + row.attention_only + row.none;
+                        return sum(b[1]) - sum(a[1]);
+                      })
+                      .slice(0, 5)
+                      .map(([agent, row]) => (
+                        <li key={agent}>
+                          <code>{agent}</code>
+                          <span>
+                            {row.both} ambos · {row.hgb_only} solo principal · {row.attention_only} solo Transformer
+                          </span>
+                        </li>
+                      ))}
+                  </ol>
+                </>
+              )}
+
+              {stats.agreement.disagreements.length > 0 && (
+                <>
+                  <p className="simBreakLede simAgreeSub">Mayores discrepancias:</p>
+                  <ol className="simTop">
+                    {stats.agreement.disagreements.slice(0, 3).map((item) => (
+                      <li key={item.ip}>
+                        <code>{item.ip}</code>
+                        <span>
+                          principal {Math.round(item.hgb * 100)} · Transformer {Math.round(item.attention * 100)}
+                        </span>
+                        <small>K={item.at_budget}</small>
+                      </li>
+                    ))}
+                  </ol>
+                </>
+              )}
+
+              <p className="simAgreeNote">
+                Test interno, sin validación externa. El Transformer <b>no decide</b>: en la ingesta
+                real bloquea siempre el modelo principal. Esta matriz existe para medir el acuerdo
+                sobre tráfico real, que es la única validación que le queda.
+              </p>
+            </div>
+
+            <div className="simBreakCard">
               <p className="eyebrow">CALIDAD DE LAS DECISIONES</p>
               <p className="simBreakLede">
                 Qué evidencia acompaña a cada bloqueo y cuánto margen tuvo sobre su umbral.
@@ -391,6 +526,19 @@ export function SimulationConsole() {
                     </span>
                     {verdict.excluded && <span className="simExcluded">EXCLUIDA · {verdict.exclusionReason}</span>}
                   </div>
+                  {/* Que avisos pesaron, enlazados con su alerta en el lote
+                      reproducido. Solo lo da el Transformer. */}
+                  {verdict.avisos_decisivos && verdict.avisos_decisivos.length > 0 && (
+                    <div className="simDecisive">
+                      <span>avisos decisivos</span>
+                      {verdict.avisos_decisivos.map((item) => (
+                        <b key={item.aviso} title={item.alert_index === null ? 'fuera del lote' : `alerta #${item.alert_index}`}>
+                          #{item.aviso}
+                          {item.alert_index !== null && <i>→ {item.alert_index}</i>}
+                        </b>
+                      ))}
+                    </div>
+                  )}
                 </article>
               );
             })}
