@@ -13,9 +13,10 @@ lo que hay aquí**.
 ```
 argos_scorer/
 ├── argos_scorer/          # paquete Python (features en vivo + puntuadores)
-├── models/                # 8 modelos serializados + config.json (6,6 MB)
+├── models/                # 8 modelos HGB + attention_block,npz (5 transformers) + config,json (7,0 MB)
 ├── state/live_state.json  # arranque en caliente (reputación + líneas base)
 ├── example.py             # demo funcional con alertas reales
+├── example_attention.py   # demo del Transformer y del consenso HGB+atención
 ├── sample_alerts.jsonl
 └── requirements.txt       # joblib, numpy, pandas, scikit-learn
 ```
@@ -48,7 +49,7 @@ Campos que consumen los puntuadores: `timestamp`, `src_ip`, `src_user`,
 también `geo_*`. Los campos del motor de reglas (`rule_*`, `mitre_*`,
 `decoder_name`) **no se usan** — ver §4.1 para el porqué.
 
-## 2 · Los tres servicios
+## 2 · Los servicios: tres principales y uno opcional
 
 ### 2.1 `EarlyBlockScorer` — bloqueo temprano de IPs (EL PRINCIPAL)
 
@@ -90,9 +91,60 @@ humana. `attack_score` = probabilidad acumulada de las familias hostiles.
 Medido: el mecanismo de rechazo captura hasta el 99,8 % de una familia de
 ataque nunca vista (mando `reject_quantile`, §5.4).
 
+### 2.4 `AttentionBlockScorer` y `ConsensusBlockScorer` — segunda opinión con Transformer (opcional)
+
+Mismo servicio que §2.1 (misma unidad, misma etiqueta, misma política
+secuencial, umbrales a precisión ≥ 0,99 fijados en validación), pero el modelo
+es un **encoder de atención** (2 bloques pre-LN, 4 cabezas, d = 32, ~18k
+parámetros por K) que ve la **secuencia** de los primeros K avisos como fichas
+(hueco, usuario nuevo, root, cuenta de sistema, puerto, agente nuevo, ventana
+nueva) y el contexto causal de subred como ficha inicial. Un modelo por
+K ∈ {2, 3, 5, 10, 20}; **K = 1 excluido a propósito**: ahí el Transformer
+ordena mejor (AUC 0,86 frente a 0,83) pero su umbral no traslada de validación
+a test y la política cae a precisión 0,976. Inferencia en **numpy puro**
+(`attention_block.npz`, 414 KB): el paquete sigue sin torch, y cada
+construcción verifica que numpy reproduce al modelo entrenado (máx. |diff|
+3,5·10⁻⁷ en 3.595 evaluaciones).
+
+**Medido** (test interno, la misma partición que §2.1; sin validación externa,
+el presupuesto de LAB-ALERTS está gastado — §4.7):
+
+| Política | Recall | Precisión | Legítimas cortadas/mes | Mediana de corte | Ataque evitado |
+|---|---|---|---|---|---|
+| HGB (§2.1, el principal) | 0,990 | 0,995 | 3 | 5º aviso | 89,3 % |
+| Atención solo | 0,992 | 0,992 | 5 | 5º aviso | 90,2 % |
+| Consenso **OR** (cualquiera dispara) | 0,995 | 0,990 | 6 | 5º aviso | 93,9 % |
+| Consenso **AND** (ambos disparan) | 0,985 | **0,997** | **2** | 5º aviso | 85,5 % |
+
+Sobre tres semillas (R13) atención y HGB **empatan**: recall 0,991 frente a
+0,990, precisión 0,991 frente a 0,993. Lectura honesta: no hay ganancia de
+detección — la etiqueta cuenta hechos (cuentas, máquinas, avisos) y no depende
+del orden, así que la atención no tiene nada que explotar que los agregados no
+capten. Lo que aporta es otra cosa: (a) una **segunda opinión** con distinto
+sesgo inductivo, que da al operador dos mandos nuevos — `AND` es la política
+más estricta medida (2 falsos al mes) y `OR` la de más recall al límite del
+objetivo de precisión — y (b) **evidencia**: `evidence.avisos_decisivos` y
+`atencion_por_aviso` dicen qué avisos pesaron en la decisión (en la práctica,
+los que introducen un usuario nuevo y los últimos de la rampa).
+
+```python
+from argos_scorer import AttentionBlockScorer, ConsensusBlockScorer
+
+att  = AttentionBlockScorer.load("models")                 # solo atención
+both = ConsensusBlockScorer.load("models", mode="and")     # o mode="or"
+verdict = both.ingest(alert)   # None o {'action':'BLOCK','fired':['hgb','attention'], ...}
+```
+
+No ejecutes `EarlyBlockScorer` y `AttentionBlockScorer` **a la vez sobre el
+mismo estado vivo**: cada uno registraría la IP como hostil y la reputación de
+subred contaría doble. Para combinar ambos usa `ConsensusBlockScorer`, que
+comparte perfil y estado y actualiza la reputación una sola vez. Se regenera
+con `build_deploy_attention.py` (repo de investigación) tras
+`build_deploy_bundle.py`.
+
 ## 3 · Estado vivo (`LiveState`)
 
-Los tres servicios comparten memoria causal — lo que hace que las variables de
+Los servicios comparten memoria causal — lo que hace que las variables de
 novedad y reputación signifiquen algo:
 
 - **Reputación de subred** (/24 y /16): cuántas IPs se han visto y cuántas
@@ -183,6 +235,15 @@ de esta escala, el deep learning no aportó ventaja medible en ninguna tarea.
 Los modelos del paquete son HistGradientBoosting: igual de buenos, ligeros
 (6,6 MB en total), sin GPU y con inferencia en microsegundos.
 
+Cuarta forma, añadida el 2026-09-07 (R13): un **Transformer de atención**
+sobre la misma secuencia, con tres semillas para separar mejora de ruido.
+AUC medio por K 0,957 frente a 0,952 del HGB — sin ventaja clara — y empate
+en la política secuencial (0,991 / 0,991 frente a 0,990 / 0,993). El único
+punto donde gana con consistencia (K = 1) no es aprovechable porque su umbral
+no traslada. Se incluye igualmente como servicio **opcional** (§2.4) por su
+valor como segunda opinión para el consenso y por la evidencia de atención,
+no por métrica; el principal sigue siendo el HGB.
+
 ### 4.7 Cómo se validó — y qué significa «validado» aquí
 
 - **Particiones temporales**, nunca aleatorias (una partición aleatoria sobre
@@ -251,11 +312,12 @@ que permite auditar falsos positivos y lo que da confianza al analista.
 | `early_block_K{1,2,3,5,10,20}.joblib` | EarlyBlockScorer | 3.354 IPs (train), umbral p99 sobre 719 IPs (val) |
 | `window_block.joblib` | WindowBlockScorer | 56.883 ventanas, calibrado isotónico |
 | `activity_scorer.joblib` | ActivityScorer | por host (000/011/030) + global, calibrado + rechazo |
-| `config.json` | todos | listas de variables (el orden manda), umbrales, notas de validación |
+| `attention_block.npz` | AttentionBlockScorer / ConsensusBlockScorer | 5 transformers (K = 2, 3, 5, 10, 20), mismos 3.354 IPs de train, umbral p99 sobre 719 IPs (val); pesos en numpy, 414 KB |
+| `config.json` | todos | listas de variables (el orden manda), umbrales, notas de validación; sección `attention_block` con hiperparámetros, normalización y métricas del test interno |
 
 Semilla 42 en todo. Reproducible de extremo a extremo desde el repositorio.
 
 ---
-*Paquete generado el 2026-09-02 desde el TFM «SIEM IDS/IPS con IA». Historia
+*Paquete generado el 2026-09-02 desde el TFM «SIEM IDS/IPS con IA»; servicio de atención añadido el 2026-09-07 (R13). Historia
 completa, experimentos y resultados retirados: `src/models/ARGOS_LAB/RESULTADOS.md`
 y la memoria técnica publicada.*
