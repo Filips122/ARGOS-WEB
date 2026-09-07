@@ -1,3 +1,17 @@
+/** Anotacion del Transformer: nunca decide, solo acompana al veredicto. */
+export type SecondOpinionView =
+  | { available: false; reason: 'first_notice' | 'out_of_budget' }
+  | {
+      available: true;
+      score: number;
+      threshold: number;
+      fired: boolean;
+      agreement: 'both' | 'hgb_only' | 'attention_only' | 'none';
+      atAlert: number;
+      decisiveNotices: number[];
+      attentionPerNotice: number[];
+    };
+
 export type Severity = 'low' | 'medium' | 'high' | 'critical';
 export type SensorSource = 'Wazuh' | 'Suricata' | 'Zeek' | 'MCP' | 'AI Engine';
 export type HealthStatus = 'online' | 'offline' | 'learning' | 'planned';
@@ -53,6 +67,12 @@ export type Attack = {
     usersTried: number;
     agentsReached: number;
     subnetHostileRatio: number;
+    /**
+     * Segunda opinion del Transformer de atencion (R13), en modo sombra.
+     * `available: false` con motivo `first_notice` significa que el modelo no
+     * puntua el primer aviso: hay que decirlo, no mostrar 0.
+     */
+    secondOpinion?: SecondOpinionView;
   };
   ai?: {
     modelId: string;

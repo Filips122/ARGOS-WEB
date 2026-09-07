@@ -35,6 +35,36 @@ export type ScorerEnvelope = {
   alert: ScorerAlert;
 };
 
+/**
+ * Anotacion del Transformer de atencion. Es una SEGUNDA OPINION en sombra:
+ * no decide, no altera `action`, `score`, `threshold` ni `decided_at_alert`,
+ * que siguen siendo siempre los del HGB.
+ *
+ * `available: false` cubre dos casos que hay que distinguir en la interfaz en
+ * vez de mostrar un cero: `first_notice` (K=1 esta excluido a proposito del
+ * paquete, su umbral no trasladaba de validacion a test) y `out_of_budget`
+ * (el numero de avisos no es uno de los presupuestos del modelo).
+ */
+export type SecondOpinion =
+  | {
+      model: 'attention';
+      available: false;
+      reason: 'first_notice' | 'out_of_budget';
+      budgets?: number[];
+    }
+  | {
+      model: 'attention';
+      available: true;
+      score: number;
+      threshold: number;
+      fired: boolean;
+      agreement: 'both' | 'hgb_only' | 'attention_only' | 'none';
+      at_alert: number;
+      /** Que avisos pesaron. Es lo unico que el HGB no puede dar. */
+      avisos_decisivos: number[];
+      atencion_por_aviso: number[];
+    };
+
 export type Verdict = {
   action: 'BLOCK';
   ip: string;
@@ -49,6 +79,8 @@ export type Verdict = {
   };
   alert_id: string;
   state_generation: number;
+  /** Anotacion, no decision. Ver SecondOpinion. */
+  second_opinion?: SecondOpinion;
 };
 
 export type IngestResult = {
@@ -58,6 +90,11 @@ export type IngestResult = {
   verdicts: Verdict[];
   cursor: unknown[] | null;
   state_generation: number;
+  /** Sombra: anotaciones, no decisiones. Nada de esto entra en `verdicts`. */
+  second_opinions?: ({ alert_id: string; ip: string } & SecondOpinion)[];
+  /** IPs donde SOLO cruza el Transformer. Son discrepancias, no bloqueos. */
+  attention_only?: { ip: string; alert_id: string; score: number; threshold: number; at_alert: number }[];
+  agreement?: Record<'both' | 'hgb_only' | 'attention_only' | 'none', number>;
 };
 
 export type ScorerHealth = {
@@ -70,6 +107,16 @@ export type ScorerHealth = {
   tracked_ips: number;
   blocked_ips: number;
   counters: Record<string, number>;
+  /** Estado del Transformer de segunda opinion. No decide nada. */
+  attention?: {
+    loaded: boolean;
+    budgets: number[];
+    n_models: number;
+    n_params_por_modelo: number;
+    role: string;
+    validacion: string;
+    agreement: Record<'both' | 'hgb_only' | 'attention_only' | 'none', number>;
+  };
 };
 
 export function toScorerEnvelope(record: DatasetRecord, sort: unknown[]): ScorerEnvelope {

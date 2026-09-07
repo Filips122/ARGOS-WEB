@@ -1,6 +1,11 @@
 import { appendFileSync, mkdirSync, readFileSync, existsSync } from 'fs';
 import path from 'path';
-import { ScorerClient, toScorerEnvelope, type Verdict } from '@/lib/argos-scorer-client';
+import {
+  ScorerClient,
+  toScorerEnvelope,
+  type SecondOpinion,
+  type Verdict,
+} from '@/lib/argos-scorer-client';
 import { DATASET_SOURCE_FIELDS, toDatasetRecord } from '@/lib/dataset-export';
 import { Exclusions, type ExclusionHit } from '@/lib/scorer-exclusions';
 import { wazuhIndexerSearch } from '@/lib/wazuh-indexer';
@@ -25,6 +30,13 @@ export type LedgerRecord = {
   model: { budget_k: number; state_generation: number };
   exclusion: { hit: boolean; status?: string; severity?: string; reason?: string };
   duplicate_of?: string;
+  /**
+   * Anotacion del Transformer en el momento de la decision. Se guarda para
+   * poder medir despues el acuerdo sobre trafico real, que es la unica
+   * validacion externa que le queda a ese modelo. No participa en la decision:
+   * `action`, `score`, `threshold` y `decided_at_alert` son los del HGB.
+   */
+  second_opinion?: SecondOpinion;
 };
 
 /**
@@ -77,6 +89,7 @@ export class VerdictLedger {
         ? { hit: true, status: exclusion.status, severity: exclusion.entry.severity, reason: exclusion.entry.reason }
         : { hit: false },
       ...(previous ? { duplicate_of: previous } : {}),
+      ...(verdict.second_opinion ? { second_opinion: verdict.second_opinion } : {}),
     };
 
     appendFileSync(this.file, JSON.stringify(record) + '\n', 'utf-8');

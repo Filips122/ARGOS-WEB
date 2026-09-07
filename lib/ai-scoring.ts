@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
+import type { SecondOpinion } from '@/lib/argos-scorer-client';
 
 type WazuhHit = {
   _id?: string;
@@ -109,6 +110,8 @@ export type IpRisk = {
     avisos: number;
     reputacion_subred_24: number;
   };
+  /** Segunda opinion del Transformer. Anota; el bloqueo lo decide el HGB. */
+  second_opinion?: SecondOpinion;
 };
 
 type SidecarScoreResponse = {

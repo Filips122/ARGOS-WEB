@@ -10,6 +10,7 @@ import {
   topCountries as mockTopCountries,
   type AgentHealthItem,
   type Attack,
+  type SecondOpinionView,
   type Severity,
 } from '@/lib/mock-data';
 import type { CriminalIntelligenceStats } from '@/lib/abuseipdb';
@@ -248,6 +249,38 @@ function readNumber(value: unknown): number | undefined {
   return Number.isFinite(numeric) ? numeric : undefined;
 }
 
+/**
+ * Traduce la anotacion del sidecar a la forma que consume la interfaz.
+ *
+ * Se conserva el caso "no disponible" con su motivo en vez de devolver
+ * undefined: el primer aviso no tiene segunda opinion por diseno del paquete
+ * (K=1 excluido), y la pantalla debe decirlo, no mostrar un cero ni callarlo.
+ */
+function normalizeSecondOpinion(raw: unknown): SecondOpinionView | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const value = raw as Record<string, unknown>;
+  if (value.available !== true) {
+    const reason = value.reason === 'out_of_budget' ? 'out_of_budget' : 'first_notice';
+    return { available: false, reason };
+  }
+  const agreements = ['both', 'hgb_only', 'attention_only', 'none'] as const;
+  const agreement = agreements.find((item) => item === value.agreement) ?? 'none';
+  return {
+    available: true,
+    score: readNumber(value.score) ?? 0,
+    threshold: readNumber(value.threshold) ?? 0,
+    fired: Boolean(value.fired),
+    agreement,
+    atAlert: readNumber(value.at_alert) ?? 0,
+    decisiveNotices: Array.isArray(value.avisos_decisivos)
+      ? value.avisos_decisivos.map((item) => readNumber(item) ?? 0)
+      : [],
+    attentionPerNotice: Array.isArray(value.atencion_por_aviso)
+      ? value.atencion_por_aviso.map((item) => readNumber(item) ?? 0)
+      : [],
+  };
+}
+
 function readGeoLocation(value: unknown): { lat: number; lon: number } | undefined {
   if (Array.isArray(value)) {
     const [lon, lat] = value;
@@ -393,6 +426,11 @@ export function normalizeWazuhAlerts(
         usersTried: readNumber(source.ml.ip_risk.evidence?.usuarios_probados) ?? 0,
         agentsReached: readNumber(source.ml.ip_risk.evidence?.maquinas_alcanzadas) ?? 0,
         subnetHostileRatio: readNumber(source.ml.ip_risk.evidence?.reputacion_subred_24) ?? 0,
+        // Segunda opinion del Transformer. Anotacion: no cambia `blocked` ni
+        // `decidedAtAlert`, que siguen siendo los del HGB. Cuando no esta
+        // disponible se conserva el motivo para poder decirlo en pantalla en
+        // vez de mostrar un 0 o callarlo.
+        secondOpinion: normalizeSecondOpinion(source.ml.ip_risk.second_opinion),
       } : undefined,
       ai: ai && typeof ai === 'object' ? {
         modelId: pickString(ai.model_id) ?? 'argos-ai',
