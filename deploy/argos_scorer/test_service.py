@@ -112,7 +112,108 @@ print(f"   P(BLOCK)={w['window']['block_score']}  familia={w['activity']['family
 assert w["window"]["block_score"] > 0.9, "estado frio? P(BLOCK) deberia ser alto con estado caliente"
 
 print()
-print("7) RECHAZO DE ARRANQUE SIN ESTADO NI SEMILLA")
+print("7) SEGUNDA OPINION EN SOMBRA (Transformer)")
+h = call("/health")
+att = h["attention"]
+print(f"   cargada={att['loaded']} presupuestos={att['budgets']} modelos={att['n_models']}"
+      f" params/modelo={att['n_params_por_modelo']}")
+assert att["loaded"] and att["budgets"] == [2, 3, 5, 10, 20], "la atencion no esta cargada"
+assert 1 not in att["budgets"], "K=1 debe estar excluido"
+
+print("   7a) los veredictos del HGB no cambian por tener sombra")
+# Referencia: EarlyBlockScorer PURO, sin atencion, desde la misma semilla.
+sys.path.insert(0, str(HERE))
+from argos_scorer import EarlyBlockScorer          # noqa: E402
+from argos_scorer.features import LiveState        # noqa: E402
+seed = json.loads((HERE / "state" / "live_state.json").read_text(encoding="utf-8"))
+pure = EarlyBlockScorer.load(HERE / "models", state_path=HERE / "state" / "live_state.json")
+golden = []
+for i, a in enumerate(alerts[:300]):
+    v = pure.ingest({k: a.get(k) for k in F})
+    if v:
+        golden.append((v["ip"], v["decided_at_alert"], round(v["score"], 6)))
+mine = [(v["ip"], v["decided_at_alert"], round(v["score"], 6)) for v in r1["verdicts"]]
+print(f"       puro={len(golden)} veredictos   sidecar={len(mine)} veredictos")
+assert golden == mine, f"la sombra altero las decisiones del HGB\n  puro={golden[:3]}\n  side={mine[:3]}"
+print("       OK: misma IP, mismo aviso de corte y mismo score, uno a uno")
+
+print("   7b) el estado vivo no se contamina (sub24 contado una sola vez)")
+# En proceso y sin reinicios: comparar contra el estado del sidecar de arriba
+# mezclaria un artefacto ajeno a esto (al rearrancar se pierden los perfiles,
+# asi que la alerta tardia vuelve a registrar llegada y sube 'seen' en una
+# subred). Aqui se aisla justo lo que se quiere probar.
+import service as _svc                                        # noqa: E402
+shadow_dir = Path(os.environ["TEMP"]) / "argos-sidecar-shadow"
+shutil.rmtree(shadow_dir, ignore_errors=True)
+with_shadow = _svc.ScorerService(HERE / "models", shadow_dir)
+for i, a in enumerate(alerts[:300]):
+    with_shadow.ingest_batch([env(i, a)])
+plain = EarlyBlockScorer.load(HERE / "models", state_path=HERE / "state" / "live_state.json")
+for a in alerts[:300]:
+    plain.ingest({k: a.get(k) for k in F})
+same = (json.dumps(json.loads(plain.state.to_json()), sort_keys=True)
+        == json.dumps(json.loads(with_shadow.early.state.to_json()), sort_keys=True))
+print(f"       LiveState identico con y sin sombra: {same}")
+assert same, ("la atencion registro llegadas u hostilidad por su cuenta: "
+              "sub24_hostile_ratio quedaria inflado")
+shutil.rmtree(shadow_dir, ignore_errors=True)
+
+print("   7c) la anotacion no es un veredicto")
+assert all(v["action"] == "BLOCK" for v in r1["verdicts"]), "action alterado"
+annotated = [v for v in r1["verdicts"] if "second_opinion" in v]
+print(f"       veredictos con segunda opinion: {len(annotated)}/{len(r1['verdicts'])}")
+print(f"       acuerdo acumulado: {r1.get('agreement')}")
+print(f"       discrepancias solo-atencion (NO son bloqueos): {len(r1.get('attention_only') or [])}")
+for v in annotated[:2]:
+    so = v["second_opinion"]
+    if so.get("available"):
+        print(f"       {v['ip']:<16} hgb={v['score']:.3f} att={so['score']:.3f}"
+              f" -> {so['agreement']}  avisos decisivos={so['avisos_decisivos']}")
+
+print("   7d) sin segunda opinion en el primer aviso, declarado")
+first = [s for s in (r1.get("second_opinions") or []) if s.get("at_alert") == 1]
+assert not first, "la atencion no debe puntuar en n=1"
+print("       OK: ninguna anotacion con at_alert=1")
+
+print()
+print("8) SIMULACRO POR POLITICA")
+sim_alerts = alerts[:400]
+blocks = {}
+for policy in ("hgb", "attention", "or", "and"):
+    s = call("/simulate", {"alerts": sim_alerts, "policy": policy})
+    blocks[policy] = len(s["verdicts"])
+    m = s["agreement"]["matrix"]
+    print(f"   {policy:<9} bloqueos={blocks[policy]:<4} matriz={m} ips_evaluadas={s['agreement']['evaluated_ips']}")
+    assert s["policy"] == policy
+print(f"   AND({blocks['and']}) <= HGB({blocks['hgb']}) y AND <= OR({blocks['or']})")
+assert blocks["and"] <= blocks["or"], "AND no puede bloquear mas que OR"
+assert blocks["and"] <= blocks["hgb"] and blocks["and"] <= blocks["attention"], "AND es la interseccion"
+assert blocks["or"] >= blocks["hgb"] and blocks["or"] >= blocks["attention"], "OR es la union"
+
+s_hgb = call("/simulate", {"alerts": sim_alerts})
+print(f"   por defecto sin parametro -> policy={s_hgb['policy']} (comportamiento intacto)")
+assert s_hgb["policy"] == "hgb" and len(s_hgb["verdicts"]) == blocks["hgb"]
+print(f"   desglose por agente destino: {len(s_hgb['agreement']['by_agent'])} agentes")
+
+print()
+print("9) LATENCIA")
+def timed(path, payload, runs=3):
+    best = None
+    for _ in range(runs):
+        t0 = time.perf_counter()
+        call(path, payload)
+        best = min(best or 9e9, time.perf_counter() - t0)
+    return best * 1000
+
+t_ing = timed("/ingest", {"batch": [env(90000 + i, a) for i, a in enumerate(alerts[:200])]}, runs=1)
+t_sim = timed("/simulate", {"alerts": sim_alerts})
+t_win = timed("/window", {"alerts": g[k], "agent_id": k[1]})
+print(f"   /ingest  200 eventos : {t_ing:8.1f} ms  ({t_ing/200:.2f} ms por evento)")
+print(f"   /simulate 400 alertas: {t_sim:8.1f} ms")
+print(f"   /window              : {t_win:8.1f} ms  (sin tocar: la atencion no interviene)")
+
+print()
+print("10) RECHAZO DE ARRANQUE SIN ESTADO NI SEMILLA")
 stop(p)
 bad = subprocess.run([str(PY), str(HERE / "service.py"), "--port", "8988",
                       "--state-dir", str(STATE / "vacio"),
@@ -122,7 +223,7 @@ print(f"   codigo de salida={bad.returncode}  (debe ser != 0)")
 assert bad.returncode != 0
 
 print()
-print("8) RECHAZO DE HOST NO-LOOPBACK")
+print("11) RECHAZO DE HOST NO-LOOPBACK")
 bad2 = subprocess.run([str(PY), str(HERE / "service.py"), "--host", "0.0.0.0", "--port", "8989"],
                       capture_output=True, text=True, timeout=60)
 print(f"   codigo de salida={bad2.returncode}  mensaje: {bad2.stderr.strip().splitlines()[-1][:70] if bad2.stderr.strip() else ''}")

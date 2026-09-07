@@ -43,15 +43,23 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs
 from typing import Any, Dict, List, Optional, Tuple
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
+import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
-from argos_scorer import ActivityScorer, EarlyBlockScorer, WindowBlockScorer  # noqa: E402
-from argos_scorer.features import LiveState, early_ip_features  # noqa: E402
+from argos_scorer import (  # noqa: E402
+    ActivityScorer,
+    AttentionBlockScorer,
+    ConsensusBlockScorer,
+    EarlyBlockScorer,
+    WindowBlockScorer,
+)
+from argos_scorer.features import LiveState, early_ip_features, ip_event  # noqa: E402
 
 STATE_VERSION = 1
 # Cubre ~14 h a nuestro caudal (~1 alerta/s), muy por encima de cualquier
@@ -262,6 +270,16 @@ class ScorerService:
         self.window = WindowBlockScorer.load(models_dir, state=state)
         self.activity = ActivityScorer.load(models_dir, state=state)
 
+        # Segunda opinion en MODO SOMBRA. Se carga con el mismo LiveState para
+        # que lea la misma reputacion de subred, pero NUNCA se llama a su
+        # ingest(): eso crearia un segundo perfil por IP y registraria la
+        # llegada y la hostilidad dos veces, falseando sub24_hostile_ratio.
+        # Solo se usa score_events(), que no toca el estado.
+        self.attention = AttentionBlockScorer.load(models_dir, state=state)
+        self.attention_meta = json.loads(
+            (models_dir / "config.json").read_text(encoding="utf-8")
+        )["attention_block"]
+
         # LRU sembrado con lo que sobrevivio al reinicio. La regla del usuario
         # ("sort <= cursor -> aceptar solo si no esta en la cola persistida")
         # es exactamente esto: rechazar si y solo si el id esta en el LRU.
@@ -273,6 +291,50 @@ class ScorerService:
         self.counters = {
             "batches": 0, "events_in": 0, "accepted": 0,
             "duplicates": 0, "late_behind_cursor": 0, "verdicts": 0,
+        }
+        # Acuerdo acumulado entre el HGB (que decide) y la atencion (que solo
+        # anota), contado en los presupuestos donde ambos opinan. Es el dato que
+        # justifica tener la segunda opinion: mide en trafico real lo que el
+        # test interno midio en laboratorio.
+        self.agreement = {"both": 0, "hgb_only": 0, "attention_only": 0, "none": 0}
+
+    # ---- segunda opinion (sombra) ----
+    def _second_opinion(self, profile: Dict[str, Any], n: int, hgb_fired: bool) -> Dict[str, Any]:
+        """Anotacion de la atencion sobre los n primeros avisos de un perfil que
+        mantiene OTRO scorer. No decide y no muta nada.
+
+        K = 1 esta excluido a proposito del paquete: su umbral no trasladaba de
+        validacion a test. Se declara como tal en vez de devolver 0.
+        """
+        if n == 1:
+            return {"model": "attention", "available": False, "reason": "first_notice"}
+        if n not in self.attention.thresholds:
+            return {"model": "attention", "available": False, "reason": "out_of_budget",
+                    "budgets": self.attention.budgets}
+
+        score, attention = self.attention.score_events(profile["events"], profile["context"], n)
+        threshold = float(self.attention.thresholds[n])
+        fired = bool(score >= threshold)
+        if hgb_fired and fired:
+            agreement = "both"
+        elif hgb_fired:
+            agreement = "hgb_only"
+        elif fired:
+            agreement = "attention_only"
+        else:
+            agreement = "none"
+
+        return {
+            "model": "attention",
+            "available": True,
+            "score": round(float(score), 4),
+            "threshold": round(threshold, 4),
+            "fired": fired,
+            "agreement": agreement,
+            "at_alert": n,
+            # Que avisos pesaron: es lo unico que el HGB no puede dar.
+            "avisos_decisivos": [int(j + 1) for j in np.argsort(-attention)[:3]],
+            "atencion_por_aviso": [round(float(a), 3) for a in attention],
         }
 
     # ---- deduplicacion ----
@@ -298,6 +360,9 @@ class ScorerService:
     # ---- ingesta ----
     def ingest_batch(self, batch: List[Dict[str, Any]]) -> Dict[str, Any]:
         verdicts: List[Dict[str, Any]] = []
+        # Registro paralelo de la sombra: no son decisiones, son anotaciones.
+        second_opinions: List[Dict[str, Any]] = []
+        attention_only: List[Dict[str, Any]] = []
         accepted = duplicates = late = 0
         cursor = self.store.cursor
 
@@ -316,13 +381,40 @@ class ScorerService:
                     late += 1
 
                 alert = {k: item.get("alert", {}).get(k) for k in MODEL_FIELDS}
+                # Hay que mirar la IP ANTES del ingest: si el HGB ya la bloqueo,
+                # no anade evento y no hay aviso nuevo que anotar. Asi la sombra
+                # ve exactamente el mismo perfil que vio quien decide.
+                event = ip_event(alert)
+                fresh = bool(event) and event["ip"] not in self.early.blocked
+
                 verdict = self.early.ingest(alert)
                 self._remember(alert_id)
                 accepted += 1
 
+                second = None
+                if fresh:
+                    profile = self.early.profiles.get(event["ip"])
+                    if profile is not None:
+                        second = self._second_opinion(
+                            profile, len(profile["events"]), hgb_fired=verdict is not None
+                        )
+                        if second.get("available"):
+                            self.agreement[second["agreement"]] += 1
+                            second_opinions.append({"alert_id": alert_id, "ip": event["ip"], **second})
+                            # Solo la atencion cruza su umbral: NO es un
+                            # veredicto, es una discrepancia que hay que medir.
+                            if second["agreement"] == "attention_only":
+                                attention_only.append({
+                                    "ip": event["ip"], "alert_id": alert_id,
+                                    "score": second["score"], "threshold": second["threshold"],
+                                    "at_alert": second["at_alert"],
+                                })
+
                 if verdict:
                     verdict["alert_id"] = alert_id
                     verdict["state_generation"] = self.store.generation + 1
+                    if second is not None:
+                        verdict["second_opinion"] = second
                     verdicts.append(verdict)
 
                 if sort is not None and (cursor is None or list(sort) > list(cursor)):
@@ -346,6 +438,75 @@ class ScorerService:
             "verdicts": verdicts,
             "cursor": cursor,
             "state_generation": generation,
+            # Sombra. Nada de esto altera 'verdicts' ni el ledger.
+            "second_opinions": second_opinions,
+            "attention_only": attention_only,
+            "agreement": dict(self.agreement),
+        }
+
+    def _agreement_matrix(self, profiles: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+        """Acuerdo entre los dos modelos sobre los perfiles tal como quedaron.
+
+        Solo IPs con >= 2 avisos, que es donde la atencion opina. Se evalua en
+        el mayor presupuesto comun alcanzado, no en el momento del corte: es una
+        foto del final, no una reconstruccion de la decision.
+        """
+        common = sorted(set(self.early.models) & set(self.attention.thresholds))
+        entries: List[Tuple[str, int, Dict[str, float], List[str]]] = []
+        for ip, profile in profiles.items():
+            events = profile["events"]
+            if len(events) < 2:
+                continue
+            budget = max((k for k in common if k <= len(events)), default=None)
+            if budget is None:
+                continue
+            row = early_ip_features(events[:budget], profile["context"])
+            agents = sorted({e["agent"] for e in events[:budget]})
+            entries.append((ip, budget, row, agents))
+
+        # Una prediccion por presupuesto, como en ip_risk: sklearn cobra por
+        # llamada, no por fila.
+        hgb_scores: Dict[str, float] = {}
+        by_budget: Dict[int, List[Tuple[str, Dict[str, float]]]] = {}
+        for ip, budget, row, _ in entries:
+            by_budget.setdefault(budget, []).append((ip, row))
+        for budget, rows in by_budget.items():
+            frame = pd.DataFrame(
+                [[float(r.get(name, 0.0)) for name in self.early.feature_order] for _, r in rows],
+                columns=self.early.feature_order,
+            )
+            for (ip, _), probability in zip(rows, self.early.models[budget].predict_proba(frame)[:, 1]):
+                hgb_scores[ip] = float(probability)
+
+        matrix = {"both": 0, "hgb_only": 0, "attention_only": 0, "none": 0}
+        by_agent: Dict[str, Dict[str, int]] = {}
+        detail: List[Dict[str, Any]] = []
+        for ip, budget, row, agents in entries:
+            profile = profiles[ip]
+            att_score, _ = self.attention.score_events(profile["events"], profile["context"], budget)
+            hgb_fired = hgb_scores[ip] >= self.early.thresholds[budget]
+            att_fired = att_score >= self.attention.thresholds[budget]
+            key = ("both" if hgb_fired and att_fired else
+                   "hgb_only" if hgb_fired else
+                   "attention_only" if att_fired else "none")
+            matrix[key] += 1
+            # Una IP que alcanza varias maquinas cuenta en cada una: las filas
+            # por agente suman mas que el total. Es el desglose que exige la
+            # convencion, no una particion.
+            for agent in agents:
+                by_agent.setdefault(agent, {"both": 0, "hgb_only": 0, "attention_only": 0, "none": 0})[key] += 1
+            if key in ("hgb_only", "attention_only"):
+                detail.append({"ip": ip, "at_budget": budget, "agreement": key,
+                               "hgb": round(hgb_scores[ip], 4), "attention": round(float(att_score), 4)})
+
+        return {
+            "matrix": matrix,
+            "evaluated_ips": len(entries),
+            "budgets": common,
+            "by_agent": by_agent,
+            "disagreements": sorted(detail, key=lambda d: -abs(d["hgb"] - d["attention"]))[:10],
+            "note": ("Acuerdo medido en el mayor presupuesto comun alcanzado por cada IP con >= 2 "
+                     "avisos. El HGB es quien decide; la atencion solo anota."),
         }
 
     def ip_risk(self, hits: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -418,6 +579,16 @@ class ScorerService:
                 },
             }
             out[ip]["evidence_kind"] = classify_evidence(out[ip]["evidence"])
+
+            # Segunda opinion en el mayor presupuesto alcanzado, no en el del
+            # corte: aqui la pregunta es "que dice el otro modelo de esta IP
+            # ahora", no "que dijo cuando se decidio".
+            budget = max((k for k in self.attention.thresholds if k <= len(events)), default=None)
+            out[ip]["second_opinion"] = (
+                self._second_opinion(profile, budget, hgb_fired=verdict is not None)
+                if budget is not None
+                else {"model": "attention", "available": False, "reason": "first_notice"}
+            )
         return out
 
     def score_panel(self, hits: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -455,21 +626,42 @@ class ScorerService:
 
         return result
 
-    def simulate(self, alerts: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def simulate(self, alerts: List[Dict[str, Any]], policy: str = "hgb") -> Dict[str, Any]:
         """Reproduce un lote completo con un puntuador EFIMERO.
 
         Sembrado desde la semilla y descartado al terminar: no toca el estado
         vivo, no avanza el cursor y da el mismo resultado cada vez que se ejecuta
         con la misma entrada. Es un simulacro, no ingesta.
+
+        `policy` elige quien decide DENTRO del simulacro, que es un banco de
+        pruebas: 'hgb' (por defecto, el unico validado externamente), 'attention',
+        'or' o 'and'. Cambiarlo aqui no cambia quien decide en /ingest.
         """
+        if policy not in {"hgb", "attention", "or", "and"}:
+            raise ValueError("policy debe ser hgb, attention, or o and")
+
         state = LiveState.from_json(self.store.seed.read_text(encoding="utf-8"))
-        sim = EarlyBlockScorer(self.early.models, self.early.thresholds, self.early.feature_order, state)
+        # Un unico LiveState para los dos modelos: la reputacion de subred se
+        # actualiza una sola vez por IP, decida quien decida.
+        attention = AttentionBlockScorer(
+            self.attention.nets, self.attention.thresholds,
+            self.attention.rich, self.attention.ctx_features, state,
+        )
+        if policy == "hgb":
+            sim = EarlyBlockScorer(self.early.models, self.early.thresholds, self.early.feature_order, state)
+        elif policy == "attention":
+            sim = attention
+        else:
+            sim = ConsensusBlockScorer(
+                self.early.models, self.early.thresholds, self.early.feature_order, attention, mode=policy,
+            )
 
         ordered = sorted(alerts, key=lambda a: str(a.get("timestamp") or ""))
         verdicts: List[Dict[str, Any]] = []
         decided_at: Dict[str, int] = {}
         seen_after: Dict[str, int] = {}
         alerts_per_ip: Dict[str, int] = {}
+        alert_indices: Dict[str, List[int]] = {}
         ips_seen: List[str] = []
 
         for index, raw in enumerate(ordered):
@@ -479,6 +671,9 @@ class ScorerService:
                 if ip not in alerts_per_ip:
                     ips_seen.append(ip)
                 alerts_per_ip[ip] = alerts_per_ip.get(ip, 0) + 1
+                # Posicion en el lote de cada aviso de esta IP, para poder
+                # enlazar despues los avisos decisivos con sus alertas.
+                alert_indices.setdefault(ip, []).append(index)
                 # Todo lo que esa IP genera DESPUES del corte es lo que un
                 # bloqueo real habria suprimido.
                 if ip in decided_at:
@@ -492,9 +687,26 @@ class ScorerService:
                 verdicts.append(verdict)
 
         for verdict in verdicts:
+            # El consenso publica 'thresholds' (uno por modelo) en vez de
+            # 'threshold'. Se normaliza al del modelo que marco el score, para
+            # que el margen siga significando lo mismo en las cuatro politicas.
+            if "threshold" not in verdict:
+                pair = verdict.get("thresholds", {})
+                fired = verdict.get("fired") or ["hgb"]
+                chosen = (max if policy == "or" else min)(pair[m] for m in fired) if pair else 0.0
+                verdict["threshold"] = round(float(chosen), 4)
             verdict["prevented_alerts"] = seen_after.get(verdict["ip"], 0)
             verdict["margin"] = round(verdict["score"] - verdict["threshold"], 4)
             verdict["evidence_kind"] = classify_evidence(verdict["evidence"])
+            # Enlaza los avisos decisivos con las alertas reproducidas: el
+            # aviso i de una IP es su i-esima alerta en este lote.
+            decisive = (verdict.get("evidence") or {}).get("avisos_decisivos")
+            if decisive:
+                indices = alert_indices.get(verdict["ip"], [])
+                verdict["avisos_decisivos"] = [
+                    {"aviso": int(a), "alert_index": indices[a - 1] if 0 < a <= len(indices) else None}
+                    for a in decisive
+                ]
 
         with_origin = len(ips_seen)
         cuts = sorted(v["decided_at_alert"] for v in verdicts)
@@ -557,6 +769,8 @@ class ScorerService:
                 ),
             },
             "verdicts": verdicts,
+            "policy": policy,
+            "agreement": self._agreement_matrix(sim.profiles),
         }
 
     def score_window(self, alerts: List[Dict[str, Any]], agent_id: str) -> Dict[str, Any]:
@@ -580,6 +794,15 @@ class ScorerService:
             "tracked_ips": len(self.early.profiles),
             "blocked_ips": len(self.early.blocked),
             "counters": dict(self.counters),
+            "attention": {
+                "loaded": bool(self.attention.nets),
+                "budgets": self.attention.budgets,
+                "n_models": len(self.attention.nets),
+                "n_params_por_modelo": self.attention_meta.get("n_params_por_modelo"),
+                "role": "segunda opinion en sombra; no decide",
+                "validacion": "test interno, sin validacion externa",
+                "agreement": dict(self.agreement),
+            },
         }
 
     def shutdown_save(self) -> None:
@@ -620,22 +843,26 @@ def make_handler(service: ScorerService):
         def do_POST(self):  # noqa: N802
             try:
                 payload = self._read_json()
-                if self.path == "/ingest":
+                route, _, raw_query = self.path.partition("?")
+                query = parse_qs(raw_query)
+                if route == "/ingest":
                     batch = payload.get("batch") or []
                     if not isinstance(batch, list):
                         raise ValueError("batch debe ser una lista")
                     self._send(200, service.ingest_batch(batch))
-                elif self.path == "/score":
+                elif route == "/score":
                     hits = payload.get("hits") or []
                     if not isinstance(hits, list):
                         raise ValueError("hits debe ser una lista")
                     self._send(200, service.score_panel(hits))
-                elif self.path == "/simulate":
+                elif route == "/simulate":
                     alerts = payload.get("alerts") or []
                     if not isinstance(alerts, list):
                         raise ValueError("alerts debe ser una lista")
-                    self._send(200, service.simulate(alerts))
-                elif self.path == "/window":
+                    # La politica vale en el cuerpo o en la cadena de consulta.
+                    policy = str(payload.get("policy") or query.get("policy", ["hgb"])[0])
+                    self._send(200, service.simulate(alerts, policy=policy))
+                elif route == "/window":
                     self._send(200, service.score_window(
                         payload.get("alerts") or [], str(payload.get("agent_id") or "?")))
                 else:
