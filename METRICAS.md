@@ -88,8 +88,21 @@ automatización.
 
 ## 3. Globo 3D (`AttackGlobe`)
 
-Representación geoespacial de los ataques. Solo dibuja las alertas de los
-**últimos 120 segundos**, para que el globo respire en vez de saturarse.
+**Qué es una representación geoespacial de ataques.** Sitúa cada evento en el
+mapa uniendo el origen aparente con el destino. Es un recurso habitual en los
+paneles de SOC, y conviene ser franco sobre su papel: **su valor es sobre todo
+de comprensión inmediata**, no analítico. Ninguna decisión de seguridad debería
+tomarse mirando un globo.
+
+**Qué aporta aquí.** Dos cosas concretas y una advertencia. Aporta la **escala
+del caudal** —se ve a simple vista que los ataques no paran— y la
+**distribución del origen**, que muestra que no hay un único atacante sino
+muchos frentes simultáneos. La advertencia: el país **no es el atacante**, es
+la máquina usada, casi siempre alquilada o comprometida.
+
+Solo dibuja las alertas de los **últimos 120 segundos**, para que el globo
+respire en vez de saturarse. Esa ventana es de presentación, no de análisis: el
+resto del panel sigue trabajando con las 10.000 alertas cargadas.
 
 | Capa | Qué representa |
 |---|---|
@@ -188,16 +201,28 @@ transferencia entre dominios y medir que no funciona), no porque aporte señal.
 
 Las **siete alertas más recientes**. Cada tarjeta lleva:
 
+**Qué es un feed de alertas.** Es la vista de *triaje*: la cola por la que un
+analista de guardia va pasando, ordenada por lo más reciente. Su función no es
+analizar sino **decidir rápido si algo merece atención**, así que cada tarjeta
+debe caber de un vistazo.
+
+**Qué aporta aquí.** Es la única pantalla donde los cuatro enriquecimientos
+aparecen **juntos sobre la misma alerta**: la severidad que dice Wazuh, el
+score del modelo, el riesgo de la IP y si el CVE se explota de verdad. Ver los
+cuatro a la vez es lo que permite detectar las contradicciones que documenta
+§ 6.4 — una alerta CRITICAL con riesgo de IP bajo y sin explotación conocida es
+inventario, no ataque.
+
 ### Bloque base
 
-| Campo | Origen | Qué representa |
-|---|---|---|
-| Severidad | **[real]** | Traducción de `rule.level`: crítica ≥12, alta ≥9, media ≥6, baja el resto. |
-| Tipo | **[derivado]** | Inferido por palabras clave de la descripción de la regla. |
-| Origen → destino | **[real]** | Ciudad/país de la IP y nombre del agente. |
-| `AI <n>` | **[real]** | Score de **ventana**. Ver la advertencia de abajo. |
-| `Rule <id>` | **[real]** | Identificador de la regla de Wazuh. |
-| `mcpTool` | **[derivado]** | Etiqueta de encaminamiento. `auth.window`, `wazuh.triage` o `argos.local-simulator`. |
+| Campo | Origen | Qué es | Qué aporta aquí |
+|---|---|---|---|
+| Severidad | **[real]** | Gravedad que asigna el autor de la regla | Traducción de `rule.level`: crítica ≥12, alta ≥9, media ≥6, baja el resto. **No mide riesgo real**; ver § 6.1. |
+| Tipo | **[derivado]** | La técnica del ataque | Inferido por palabras clave de la descripción, no viene de Wazuh. El 98 % cae en dos categorías genéricas. |
+| Origen → destino | **[real]** | Quién ataca a quién | Ciudad/país de la IP y nombre del agente. Lleva `(aprox.)` si la geolocalización es de reserva. |
+| `AI <n>` | **[real]** | Score del modelo | Es de la **ventana** de un minuto del agente, no de esta alerta. Ver § 5. |
+| `Rule <id>` | **[real]** | Identificador de la regla de Wazuh | Permite ir al origen y comprobar por qué saltó. Es el ancla de trazabilidad. |
+| `mcpTool` | **[derivado]** | — | Etiqueta de encaminamiento heredada: `auth.window` (95 %), `wazuh.triage` (5 %), `argos.local-simulator`. **El nombre es engañoso**: no tiene relación con el MCP de § 10. |
 
 ### `IP <n>` — riesgo por dirección **[real]**
 
@@ -628,14 +653,95 @@ deducirse del silencio.
 
 ### Métricas principales
 
-| Métrica | Qué representa |
-|---|---|
-| **Alertas reproducidas** | Volumen de entrada. |
-| **IPs con origen de red** | Direcciones distintas puntuables. |
-| **Bloqueadas** | Cuántas cruzaron su umbral. |
-| **Tasa de bloqueo** | Porcentaje, con aviso si sale de la banda 60-85 %. |
-| **Mediana de corte** | En qué aviso decide típicamente. Referencia: el 5º. |
-| **Alertas suprimidas** | Lo que esas IPs generaron **después** del corte. |
+**El concepto que las une: decisión secuencial con presupuesto.** El modelo de
+bloqueo temprano no clasifica una alerta aislada. Va acumulando avisos de una
+misma IP y, en cada uno, decide si ya tiene suficiente para cortar o si espera
+al siguiente. Es un problema de *parada óptima*: cortar pronto arriesga
+bloquear a un inocente; esperar demasiado deja pasar el ataque. El
+«presupuesto» es el número de avisos que se permite observar antes de decidir
+(K = 1, 2, 3, 5, 10, 20).
+
+Esto es lo que distingue el simulacro del resto del panel: **las demás métricas
+describen, esta decide.**
+
+---
+
+#### `Alertas reproducidas`
+
+**Qué es.** El volumen de entrada de la reproducción: cuántos eventos reales se
+han hecho pasar por el modelo, en orden temporal, como si llegaran en vivo.
+
+**Qué aporta aquí.** Es el denominador de todo lo demás y, sobre todo, la
+garantía de que **no se ha elegido la muestra**: se reproduce una ventana
+temporal completa, no una selección de casos favorables.
+
+---
+
+#### `IPs con origen de red`
+
+**Qué es.** Cuántas direcciones distintas hay entre esas alertas. Es la unidad
+sobre la que se decide: se bloquean IPs, no alertas.
+
+**Qué aporta aquí.** Marca la diferencia entre las dos poblaciones del panel.
+Solo el **22,6 %** de las alertas traen una IP puntuable; el resto —Trivy,
+syscheck, systemd— no tienen atacante al que bloquear. Cualquier porcentaje del
+simulacro se calcula sobre esta cifra, no sobre el total de alertas.
+
+---
+
+#### `Bloqueadas` y `Tasa de bloqueo`
+
+**Qué es.** Cuántas de esas IPs cruzaron su umbral, y el porcentaje. Una *tasa
+de bloqueo* es la proporción de sujetos sobre los que el sistema actuaría.
+
+**Qué aporta aquí, y de dónde sale la banda.** Se muestra con un aviso si sale
+de la banda **60–85 %**, que **no es un objetivo, es un detector de avería**:
+es el rango que se observó en el entorno de entrenamiento del paquete. Salirse
+por abajo sugiere que el modelo llega con datos que no reconoce; salirse por
+arriba, que está bloqueando indiscriminadamente. En ambos casos el número que
+hay que revisar es el modelo, no el atacante.
+
+Es la métrica más fácil de malinterpretar: una tasa alta **no** significa
+buena detección. Significa que muchas IPs cruzaron un umbral, y como casi todo
+lo que llega a este laboratorio es hostil, una tasa alta es lo esperable y no
+demuestra nada por sí sola.
+
+---
+
+#### `Mediana de corte`
+
+**Qué es.** En qué número de aviso decide el modelo, típicamente. Se usa la
+**mediana y no la media** a propósito: unas pocas IPs que se deciden muy tarde
+arrastrarían la media y darían una impresión falsa de lentitud.
+
+**Qué aporta aquí — es la métrica que da nombre a «bloqueo temprano».** Toda la
+propuesta consiste en cortar *antes* de que el ataque haga daño. La referencia
+es el **5.º aviso**: si el modelo decide típicamente ahí, está cortando con
+poca evidencia acumulada, que es el objetivo. Si la mediana se fuera al 15.º o
+al 20.º, el adjetivo «temprano» dejaría de ser defendible y habría que
+retirarlo de la memoria.
+
+---
+
+#### `Alertas suprimidas`
+
+**Qué es.** Cuántas alertas generaron esas IPs **después** del momento del
+corte. Es una métrica **contrafactual**: cuenta lo que habría dejado de pasar
+si el bloqueo se hubiera aplicado de verdad.
+
+**Qué aporta aquí, y su límite honesto.** Es el argumento de utilidad: traduce
+la decisión a algo tangible —«se habrían evitado N alertas»—. Pero es una
+**estimación optimista por construcción**, por dos motivos que hay que decir
+siempre que se cite:
+
+1. Supone que la IP habría seguido comportándose igual tras el bloqueo, cuando
+   un atacante real podría cambiar de dirección.
+2. Está **fuertemente concentrada**: medido, entre el **55 y el 67 %** de todo
+   lo suprimido lo aportan solo **3 IPs**. La mediana por IP es de **27**
+   alertas frente a un máximo de **872**.
+
+Por eso nunca se muestra sola. El desglose que viene a continuación es
+obligatorio, no decorativo.
 
 ### Desglose — por qué no basta el porcentaje
 
