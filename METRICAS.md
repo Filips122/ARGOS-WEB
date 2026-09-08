@@ -4,6 +4,13 @@ Inventario de cada pantalla, cada métrica y qué representa en el proyecto.
 Se indica siempre **de dónde sale el número** y, cuando procede, qué **no**
 significa.
 
+> **¿Buscas material para la memoria del TFM?** Este documento inventaría la
+> **aplicación**: qué muestra cada pantalla y qué significa cada número. La
+> línea argumental del trabajo —hipótesis, circularidad, ablación, LOAO,
+> limitaciones y qué no se puede afirmar— está en
+> **[`DOSSIER_TFM.md`](DOSSIER_TFM.md)**. Los dos se complementan: aquel es el
+> capítulo de resultados, éste el de la herramienta.
+
 > Convención usada en este documento:
 > **[real]** calculado sobre datos vivos · **[fijo]** valor escrito en el código,
 > no refleja estado · **[derivado]** calculado a partir de otra métrica ·
