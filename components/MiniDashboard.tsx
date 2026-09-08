@@ -15,10 +15,14 @@ export function MiniDashboard({
   kpis = mockKpis,
   charts,
   mode = 'demo',
+  loadedAlerts,
 }: {
   kpis?: typeof mockKpis;
   charts?: ArgosLiveData['charts'];
   mode?: 'live' | 'partial' | 'demo';
+  /** Alertas cargadas en el refresco: el reparto de riesgo declara con el
+   *  cuantas quedan fuera por no tener IP de origen. */
+  loadedAlerts?: number;
 }) {
   const attackTypeStats = charts?.attacksByType ?? mockAttackTypeStats;
   const severityStats = charts?.severityDistribution ?? mockSeverityStats;
@@ -52,7 +56,7 @@ export function MiniDashboard({
       </div>
 
       <div className="chartGrid secondaryCharts">
-        <RiskMatrix data={riskDistribution} />
+        <RiskMatrix data={riskDistribution} loadedAlerts={loadedAlerts} />
         <HorizontalBars title="MITRE tactics" data={mitreStats} />
         <CorrelationSources data={correlationSources} />
       </div>
@@ -231,13 +235,33 @@ function StackedTimeline({ title, data }: { title: string; data: TimelineBucket[
   );
 }
 
-function RiskMatrix({ data }: { data?: ArgosLiveData['charts']['riskDistribution'] }) {
+/**
+ * Reparto del riesgo por IP.
+ *
+ * Solo entran las alertas que TIENEN direccion de origen. Las del escaner de
+ * vulnerabilidades y las del sistema no tienen atacante al que puntuar, asi que
+ * quedan fuera. Esa proporcion oscila mucho entre refrescos segun lo que
+ * domine la ventana cargada: medido, del 2 % al 82 %.
+ *
+ * Por eso la cobertura se declara debajo del reparto. Antes no se decia y la
+ * suma de los tramos no cuadraba con las alertas cargadas: quien lo sumaba
+ * encontraba un agujero sin explicacion.
+ */
+function RiskMatrix({
+  data,
+  loadedAlerts,
+}: {
+  data?: ArgosLiveData['charts']['riskDistribution'];
+  loadedAlerts?: number;
+}) {
   const [selectedRange, setSelectedRange] = useState<ArgosLiveData['charts']['riskDistribution'][number] | null>(null);
   const cells = data?.length ? data : buildFallbackRiskBuckets();
+  const scored = cells.reduce((sum, bucket) => sum + bucket.count, 0);
+  const outside = Math.max(0, (loadedAlerts ?? scored) - scored);
 
   return (
     <article className="chartCard riskCard">
-      <ChartTitle title="AI risk distribution" />
+      <ChartTitle title="Reparto de riesgo por IP" />
       <div className="riskGrid">
         {cells.map((bucket) => (
           <button
@@ -251,6 +275,18 @@ function RiskMatrix({ data }: { data?: ArgosLiveData['charts']['riskDistribution
           </button>
         ))}
       </div>
+      <p className="riskCoverage">
+        Sobre <b>{scored.toLocaleString('es-ES')}</b> alertas con IP de origen.
+        {outside > 0 && (
+          <>
+            {' '}
+            <span>
+              {outside.toLocaleString('es-ES')} sin dirección quedan fuera: el escáner de
+              vulnerabilidades y los eventos del sistema no tienen atacante al que puntuar.
+            </span>
+          </>
+        )}
+      </p>
       {selectedRange && (
         <div className="riskPopover" role="dialog" aria-label={`Detalle AI risk ${selectedRange.label}`}>
           <div className="riskPopoverHeader">

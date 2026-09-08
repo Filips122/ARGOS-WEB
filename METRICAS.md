@@ -665,6 +665,21 @@ La distribución está **cargada hacia arriba** —lo esperable en un laboratori
 que recibe sobre todo tráfico hostil— pero es una curva, no dos picos. Al pulsar
 un tramo se abre el detalle con los scores exactos que lo componen.
 
+> **La suma de los tramos NO es el total de alertas cargadas, y la gráfica lo
+> declara.** Solo entran las que tienen IP de origen. Los hallazgos del escáner
+> de vulnerabilidades y los eventos del sistema **no tienen atacante al que
+> puntuar**, así que quedan fuera.
+>
+> Esa proporción **oscila muchísimo** entre refrescos, según qué domine la
+> ventana de 10.000 alertas: medido, entre el **2 % y el 82 %** sin dirección.
+> Una ráfaga del escáner puede dejar el reparto sobre menos de 2.000 alertas.
+> Por eso la cobertura va escrita debajo del reparto: sin ella, quien sume los
+> ocho tramos encuentra un agujero sin explicación.
+>
+> **Consecuencia para la lectura:** el `Riesgo IP medio` y las `IPs de riesgo
+> alto` se calculan sobre esa misma base variable. Son cifras sobre el tráfico
+> con atacante identificable, no sobre todas las alertas.
+
 > **Qué había antes.** El mismo histograma sobre el score de **ventana**, y
 > tenía forma de **U**: 5.412 alertas en el primer tramo y 4.482 en el último,
 > con los seis intermedios casi vacíos. Esa forma es la firma de un clasificador

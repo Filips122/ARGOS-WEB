@@ -1389,3 +1389,14 @@ button.wazuhAlertRow:hover {
 .ipScoreCell.medio { color: var(--yellow); }
 .ipScoreCell.bajo { color: var(--muted); }
 .ipScoreCell.none { color: rgba(126, 168, 184, 0.45); }
+
+/* Cobertura del reparto de riesgo: sin esta nota, la suma de los tramos no
+   cuadra con las alertas cargadas y no hay forma de saber por que. */
+.riskCoverage {
+  margin: 9px 0 0;
+  color: var(--muted);
+  font-size: 0.64rem;
+  line-height: 1.4;
+}
+.riskCoverage b { color: var(--text); }
+.riskCoverage span { color: rgba(126, 168, 184, 0.78); }

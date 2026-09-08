@@ -89,7 +89,7 @@ export function ArgosCommandCenter() {
         />
       </section>
 
-      <MiniDashboard kpis={data?.kpis} charts={data?.charts} mode={data?.mode} />
+      <MiniDashboard kpis={data?.kpis} charts={data?.charts} mode={data?.mode} loadedAlerts={data?.attacks?.length} />
       <McpChatWidget />
     </main>
   );
