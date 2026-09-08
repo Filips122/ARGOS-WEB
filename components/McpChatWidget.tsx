@@ -30,10 +30,15 @@ const KEYWORD_HINT =
 const CLAUDE_HINT =
   'Conectado a Claude sobre las herramientas MCP de ARGOS. Pregunta en lenguaje natural: puede encadenar consultas, cruzar alertas con riesgo de IP y simular bloqueos en seco.';
 
+/**
+ * La cabecera dice que motor RESPONDE, no como se llama el boton. Con el motor
+ * de reglas no interviene ningun MCP, asi que ponerle "MCP" seria mentir sobre
+ * el origen de la respuesta.
+ */
 const ENGINE_LABEL: Record<Engine, string> = {
   cli: 'MCP · suscripcion',
   api: 'MCP · clave de API',
-  keywords: 'CONSULTA',
+  keywords: 'SIN MCP · reglas',
 };
 
 function formatArgs(args: Record<string, unknown>) {
@@ -201,16 +206,16 @@ export function McpChatWidget() {
   return (
     <div className="mcpChatDock" aria-live="polite">
       {open && (
-        <section className="mcpChatPanel" aria-label="Consulta de alertas ARGOS">
+        <section className="mcpChatPanel" aria-label="Asistente MCP de ARGOS">
           <div className="mcpChatHeader">
             <div>
               <span>
-                {status ? ENGINE_LABEL[status.engine] : 'CONSULTA'}
+                {status ? ENGINE_LABEL[status.engine] : 'MCP'}
                 {usingClaude ? ` · ${status?.tools ?? 0} herramientas` : ''}
               </span>
               <b>ARGOS SOC Assistant</b>
             </div>
-            <button type="button" onClick={() => setOpen(false)} aria-label="Cerrar consulta">
+            <button type="button" onClick={() => setOpen(false)} aria-label="Cerrar el asistente">
               x
             </button>
           </div>
@@ -257,7 +262,7 @@ export function McpChatWidget() {
               value={input}
               onChange={(event) => setInput(event.target.value)}
               placeholder={usingClaude ? 'Ej: que IP deberia bloquear y por que?' : 'Ej: ultimos 5 critical'}
-              aria-label="Consulta sobre las alertas"
+              aria-label="Pregunta al asistente MCP"
             />
             <button type="submit" disabled={loading || !input.trim()}>
               Send
@@ -273,8 +278,8 @@ export function McpChatWidget() {
           setOpen((current) => !current);
           window.setTimeout(() => inputRef.current?.focus(), 0);
         }}
-        aria-label={open ? 'Cerrar consulta' : 'Abrir consulta de alertas'}
-      >CONSULTA</button>
+        aria-label={open ? 'Cerrar el asistente MCP' : 'Abrir el asistente MCP'}
+      >MCP</button>
     </div>
   );
 }

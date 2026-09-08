@@ -1290,7 +1290,8 @@ button.wazuhAlertRow:hover {
   align-items: end;
   gap: 4px;
   height: 132px;
-  margin-top: 6px;
+  /* Hueco superior para que la etiqueta de la columna mas alta no se corte. */
+  margin-top: 18px;
 }
 .stackCol {
   display: grid;
@@ -1340,12 +1341,16 @@ button.wazuhAlertRow:hover {
 .stackPeak {
   position: absolute;
   left: 50%;
-  transform: translate(-50%, -4px);
-  color: var(--text);
-  font-size: 0.6rem;
+  transform: translate(-50%, -3px);
+  color: var(--muted);
+  font-size: 0.58rem;
   white-space: nowrap;
   pointer-events: none;
 }
+/* El tramo de mayor proporcion, destacado entre los ocho: la etiqueta esta
+   para ahorrar la comparacion, no para obligar a leer ocho cifras iguales. */
+.stackPeak.top { color: var(--cyan); font-weight: 600; }
+.stackCol.on .stackPeak { color: var(--text); }
 .stackTip {
   position: absolute;
   bottom: calc(100% + 8px);

@@ -165,8 +165,8 @@ function StackedTimeline({ title, data }: { title: string; data: TimelineBucket[
   const max = Math.max(1, ...data.map((item) => item.alerts));
   const totalAlerts = data.reduce((sum, item) => sum + item.alerts, 0);
   const totalRisk = data.reduce((sum, item) => sum + item.ai, 0);
-  // El tramo con mayor proporción de riesgo: es el único valor que se etiqueta
-  // directamente. Una cifra sobre cada columna sería ruido y no se lee.
+  // El tramo de mayor proporción se resalta entre los demás: comparar ocho
+  // cifras a ojo es justo lo que la etiqueta debería ahorrar.
   const peak = data.reduce(
     (best, item, index) =>
       item.alerts > 0 && item.ai / item.alerts > best.ratio ? { index, ratio: item.ai / item.alerts } : best,
@@ -192,8 +192,14 @@ function StackedTimeline({ title, data }: { title: string; data: TimelineBucket[
               tabIndex={0}
             >
               <div className="stackPlot">
-                {index === peak.index && item.alerts > 0 && (
-                  <span className="stackPeak" style={{ bottom: `${height}%` }}>
+                {/* El porcentaje va en todas las columnas con datos. En las
+                    vacias se omite: un "0 %" ahi diria que nada fue peligroso,
+                    cuando lo que pasa es que no hay alertas cargadas. */}
+                {item.alerts > 0 && (
+                  <span
+                    className={`stackPeak${index === peak.index ? ' top' : ''}`}
+                    style={{ bottom: `${height}%` }}
+                  >
                     {Math.round(share * 100)} %
                   </span>
                 )}

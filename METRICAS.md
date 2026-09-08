@@ -588,6 +588,11 @@ Medido en una ejecución:
 es el que **menos** riesgo concentra. Un analista que priorice por altura de
 barra atacaría el problema equivocado.
 
+Cada columna con datos lleva su porcentaje encima, y el tramo de mayor
+proporción va resaltado en cian. Las columnas vacías **no** llevan etiqueta: un
+«0 %» ahí diría que nada fue peligroso, cuando lo que ocurre es que no hay
+alertas cargadas en ese tramo.
+
 > **Por qué se cambió, y qué había antes.** La gráfica era de dos líneas:
 > alertas totales y alertas con `AI Score ≥ 70`. Ese umbral **lo cruzaba el
 > 100 % de las alertas** —el 96,8 % puntúa exactamente 100—, así que las dos
