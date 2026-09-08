@@ -563,15 +563,45 @@ pero **está mal poblada**. Lo crítico es inventario y lo bajo son ataques. La
 gráfica por sí sola induce a error; solo tiene valor leída junto al contraste
 de explotación real.
 
-#### `Alertas vs IA por hora` **[real]**
+#### `Volumen por tramo y cuánto viene de IPs peligrosas` **[real]**
 
 **Qué es.** Una *serie temporal* reparte los eventos por su marca de tiempo.
 Sirve para ver campañas: un pico a una hora concreta sugiere una acción
 coordinada, un caudal plano sugiere ruido de fondo automatizado.
 
-**Qué aporta aquí.** Ocho tramos de tres horas, agrupados por la **hora real**
-de cada alerta. Superpone el volumen total y el detectado por la IA, para ver
-si el modelo sigue al caudal o se dispara en momentos concretos.
+**Qué aporta aquí.** Ocho columnas apiladas, una por tramo de tres horas,
+agrupadas por la **hora real** de cada alerta. La altura total es el volumen; el
+segmento destacado son las alertas cuya **IP tiene riesgo ≥ 0,9**. Responde a
+una pregunta que el volumen solo no contesta: *¿este pico es peligroso o es
+ruido?*
+
+Medido en una ejecución:
+
+| Tramo | Alertas | De riesgo alto | % | IPs distintas |
+|---|---|---|---|---|
+| 09h | 2.023 | 1.782 | **88 %** | 42 |
+| 12h | 2.790 | 2.012 | 72 % | 51 |
+| 15h | 1.406 | 994 | 71 % | 43 |
+| 18h | 3.782 | 1.695 | **45 %** | 60 |
+
+**El hallazgo que la versión anterior escondía:** el tramo con más alertas (18h)
+es el que **menos** riesgo concentra. Un analista que priorice por altura de
+barra atacaría el problema equivocado.
+
+> **Por qué se cambió, y qué había antes.** La gráfica era de dos líneas:
+> alertas totales y alertas con `AI Score ≥ 70`. Ese umbral **lo cruzaba el
+> 100 % de las alertas** —el 96,8 % puntúa exactamente 100—, así que las dos
+> líneas caían una sobre otra y no aportaban nada más que el volumen. Era otra
+> manifestación de la saturación descrita en § 5.
+>
+> Se descartó poner **IPs distintas** como segunda serie, aunque es informativa
+> (31–62 por tramo): obligaría a un segundo eje Y, y dos escalas en un mismo
+> plot inventan una correlación que no está en los datos. Va en el tooltip.
+>
+> El cambio de líneas a columnas no es estético. Una línea **interpola**: dibuja
+> una pendiente entre las 12h y las 15h como si hubiera algo en medio, y con
+> tramos vacíos trazaba caídas suaves hasta cero que sugerían un descenso
+> gradual que no ocurrió — esas alertas simplemente ya no están cargadas.
 
 > **Cómo leerla sin equivocarse.** Antes agrupaba por la posición en la lista
 > (`index % 8`), lo que producía ocho barras casi idénticas con forma de

@@ -47,7 +47,7 @@ export function MiniDashboard({
       <div className="chartGrid primaryCharts">
         <BarChart title="Ataques por tipo" data={attackTypeStats} />
         <DonutChart title="Distribución por severidad" data={severityStats} />
-        <LineChart title="Alertas vs IA por hora" data={timelineStats} />
+        <StackedTimeline title="Volumen por tramo y cuánto viene de IPs peligrosas" data={timelineStats} />
         <HorizontalBars title="Top países origen" data={topCountries} />
       </div>
 
@@ -139,19 +139,88 @@ function DonutChart({ title, data }: { title: string; data: { label: string; val
   );
 }
 
-function LineChart({ title, data }: { title: string; data: { label: string; alerts: number; ai: number }[] }) {
-  const max = Math.max(1, ...data.flatMap((item) => [item.alerts, item.ai]));
-  const pointsAlerts = data.map((item, index) => `${(index / (data.length - 1)) * 100},${100 - (item.alerts / max) * 86}`).join(' ');
-  const pointsAi = data.map((item, index) => `${(index / (data.length - 1)) * 100},${100 - (item.ai / max) * 86}`).join(' ');
+type TimelineBucket = { label: string; alerts: number; ai: number; ips?: number };
+
+/**
+ * Volumen por tramo de 3 h, con la parte que viene de IPs peligrosas.
+ *
+ * Antes eran dos líneas: alertas y alertas con score de ventana >= 70. Ese
+ * umbral lo cruzaba el 100 % de las alertas, así que las dos líneas caían una
+ * encima de otra y la gráfica no decía nada. Además una línea interpola entre
+ * tramos —dibuja una pendiente entre las 12h y las 15h como si hubiera algo en
+ * medio— y con tramos vacíos trazaba caídas suaves a cero que sugerían un
+ * descenso gradual que no ocurrió: simplemente esas alertas ya no están
+ * cargadas.
+ *
+ * Ahora es una columna apilada por tramo. Misma unidad, y una serie es
+ * subconjunto de la otra: eso es parte-de-un-todo, que se apila, no dos barras
+ * al lado. El segmento destacado son las alertas cuya IP tiene riesgo >= 0,9,
+ * que sí varía (medido: del 53 % al 91 %) y separa un pico de volumen de un
+ * pico de peligro.
+ *
+ * Forma «énfasis»: un color para lo que importa, gris para el resto.
+ */
+function StackedTimeline({ title, data }: { title: string; data: TimelineBucket[] }) {
+  const [hover, setHover] = useState<number | null>(null);
+  const max = Math.max(1, ...data.map((item) => item.alerts));
+  const totalAlerts = data.reduce((sum, item) => sum + item.alerts, 0);
+  const totalRisk = data.reduce((sum, item) => sum + item.ai, 0);
+  // El tramo con mayor proporción de riesgo: es el único valor que se etiqueta
+  // directamente. Una cifra sobre cada columna sería ruido y no se lee.
+  const peak = data.reduce(
+    (best, item, index) =>
+      item.alerts > 0 && item.ai / item.alerts > best.ratio ? { index, ratio: item.ai / item.alerts } : best,
+    { index: -1, ratio: 0 }
+  );
 
   return (
     <article className="chartCard">
       <ChartTitle title={title} />
-      <svg className="lineSvg" viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label={title}>
-        <polyline points={pointsAlerts} className="lineAlerts" />
-        <polyline points={pointsAi} className="lineAi" />
-      </svg>
-      <div className="lineLegend"><span>Total alerts</span><span>AI risk events</span></div>
+      <div className="stackChart" role="img" aria-label={`${title}. ${totalAlerts} alertas, ${totalRisk} de IPs con riesgo alto.`}>
+        {data.map((item, index) => {
+          const share = item.alerts > 0 ? item.ai / item.alerts : 0;
+          const height = (item.alerts / max) * 100;
+          const riskHeight = item.alerts > 0 ? (item.ai / item.alerts) * 100 : 0;
+          return (
+            <div
+              className={`stackCol${hover === index ? ' on' : ''}`}
+              key={item.label}
+              onMouseEnter={() => setHover(index)}
+              onMouseLeave={() => setHover(null)}
+              onFocus={() => setHover(index)}
+              onBlur={() => setHover(null)}
+              tabIndex={0}
+            >
+              <div className="stackPlot">
+                {index === peak.index && item.alerts > 0 && (
+                  <span className="stackPeak" style={{ bottom: `${height}%` }}>
+                    {Math.round(share * 100)} %
+                  </span>
+                )}
+                <div className="stackBar" style={{ height: `${height}%` }}>
+                  <i className="stackRest" />
+                  <i className="stackRisk" style={{ height: `${riskHeight}%` }} />
+                </div>
+                {hover === index && (
+                  <div className="stackTip" role="tooltip">
+                    <b>{item.label}</b>
+                    <span>{item.alerts.toLocaleString('es-ES')} alertas</span>
+                    <span>
+                      {item.ai.toLocaleString('es-ES')} de IPs con riesgo alto ({Math.round(share * 100)} %)
+                    </span>
+                    {item.ips !== undefined && <span>{item.ips} IP(s) distintas</span>}
+                  </div>
+                )}
+              </div>
+              <small>{item.label}</small>
+            </div>
+          );
+        })}
+      </div>
+      <div className="stackLegend">
+        <span><i className="swRisk" />De IPs con riesgo ≥ 0,9</span>
+        <span><i className="swRest" />Resto</span>
+      </div>
     </article>
   );
 }

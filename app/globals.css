@@ -243,6 +243,24 @@ button, input { font: inherit; }
   backdrop-filter: blur(14px);
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.38), inset 0 0 28px rgba(56, 248, 212, 0.045);
 }
+/* La ficha va posicionada dentro de .globeViewport, que mide 615 px y recorta
+   con overflow:hidden. Sin tope propio, todo lo que pase de ahi desaparece:
+   al anadir el bloque de la segunda opinion, que va al final, quedaba cortado.
+   Mismo patron que .targetAttackCard, que ya lo tenia.
+   overscroll-behavior evita que la rueda, al llegar al final de la ficha,
+   siga hacia el globo y lo haga zoom. */
+.attackDetailCard:not(.tableAttackDetail) {
+  max-height: calc(100% - 28px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+/* Barra de desplazamiento discreta: la de serie sobre fondo oscuro parece un
+   fallo de pintado. */
+.attackDetailCard:not(.tableAttackDetail)::-webkit-scrollbar { width: 6px; }
+.attackDetailCard:not(.tableAttackDetail)::-webkit-scrollbar-track { background: transparent; }
+.attackDetailCard:not(.tableAttackDetail)::-webkit-scrollbar-thumb {
+  background: rgba(56, 248, 212, 0.28);
+}
 .attackDetailCard.tableAttackDetail {
   position: relative;
   right: auto;
@@ -557,13 +575,6 @@ button.wazuhAlertRow:hover {
 .legendList i { width: 10px; height: 10px; border-radius: 50%; }
 .legendList b { color: white; }
 
-.lineSvg { width: 100%; height: 154px; background-image: linear-gradient(rgba(126, 168, 184, 0.1) 1px, transparent 1px); background-size: 100% 28px; }
-.lineSvg polyline { fill: none; stroke-width: 2.3; vector-effect: non-scaling-stroke; }
-.lineAlerts { stroke: var(--cyan); filter: drop-shadow(0 0 6px rgba(56, 248, 212, 0.45)); }
-.lineAi { stroke: var(--violet); filter: drop-shadow(0 0 6px rgba(176, 108, 255, 0.45)); }
-.lineLegend { display: flex; gap: 18px; color: var(--muted); font-size: 0.76rem; }
-.lineLegend span::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--cyan); }
-.lineLegend span:last-child::before { background: var(--violet); }
 
 .horizontalBars { display: grid; gap: 11px; margin-top: 18px; }
 .hBarRow { display: grid; grid-template-columns: 88px 1fr 32px; align-items: center; gap: 8px; }
@@ -1267,3 +1278,102 @@ button.wazuhAlertRow:hover {
   font-size: 0.62rem;
   color: #38f8d4;
 }
+
+/* Columnas apiladas por tramo horario. Sustituye a la gráfica de dos líneas,
+   que dibujaba dos series identicas superpuestas. Especificaciones de la guia
+   de visualizacion: barra <=24 px, extremo redondeado 4 px y cuadrado en la
+   base, separador de 2 px del color de la superficie entre segmentos. */
+.stackChart {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  align-items: end;
+  gap: 4px;
+  height: 132px;
+  margin-top: 6px;
+}
+.stackCol {
+  display: grid;
+  grid-template-rows: 1fr auto;
+  gap: 5px;
+  height: 100%;
+  outline: none;
+}
+.stackCol > small {
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.6rem;
+}
+.stackCol.on > small { color: var(--text); }
+.stackPlot {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  height: 100%;
+}
+.stackBar {
+  position: relative;
+  width: min(24px, 100%);
+  min-height: 2px;
+  /* Extremo de dato redondeado, base cuadrada: la barra crece desde el eje. */
+  border-radius: 4px 4px 0 0;
+  overflow: hidden;
+}
+.stackRest {
+  position: absolute;
+  inset: 0;
+  background: #4a6473;
+}
+.stackRisk {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--cyan);
+  /* El separador es un hueco del color del panel, no un borde: la guia pide
+     que separe el espacio, no tinta que no es dato. */
+  box-shadow: 0 2px 0 0 var(--panel-strong);
+}
+.stackCol.on .stackRisk { filter: brightness(1.15); }
+.stackCol.on .stackRest { background: #5b7a8c; }
+.stackPeak {
+  position: absolute;
+  left: 50%;
+  transform: translate(-50%, -4px);
+  color: var(--text);
+  font-size: 0.6rem;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.stackTip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: grid;
+  gap: 1px;
+  padding: 6px 8px;
+  min-width: 150px;
+  border: 1px solid var(--line-strong);
+  background: rgba(2, 6, 23, 0.96);
+  color: var(--text);
+  font-size: 0.62rem;
+  line-height: 1.35;
+  pointer-events: none;
+}
+.stackTip b { color: var(--cyan); font-size: 0.66rem; }
+.stackTip span { color: rgba(230, 251, 255, 0.85); }
+.stackLegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 9px;
+  color: var(--muted);
+  font-size: 0.62rem;
+}
+.stackLegend span { display: inline-flex; align-items: center; gap: 5px; }
+.stackLegend i { width: 9px; height: 9px; display: inline-block; }
+.stackLegend .swRisk { background: var(--cyan); }
+.stackLegend .swRest { background: #4a6473; }

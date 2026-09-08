@@ -286,15 +286,16 @@ export const severityStats = [
   { label: 'Low', value: 22, color: '#38f8d4' },
 ];
 
+/** `ai` es el subconjunto de `alerts` cuya IP tiene riesgo >= 0,9. */
 export const timelineStats = [
-  { label: '00h', alerts: 42, ai: 11 },
-  { label: '03h', alerts: 61, ai: 17 },
-  { label: '06h', alerts: 54, ai: 14 },
-  { label: '09h', alerts: 88, ai: 29 },
-  { label: '12h', alerts: 123, ai: 37 },
-  { label: '15h', alerts: 97, ai: 31 },
-  { label: '18h', alerts: 141, ai: 44 },
-  { label: '21h', alerts: 109, ai: 33 },
+  { label: '00h', alerts: 42, ai: 11, ips: 9 },
+  { label: '03h', alerts: 61, ai: 17, ips: 12 },
+  { label: '06h', alerts: 54, ai: 14, ips: 11 },
+  { label: '09h', alerts: 88, ai: 29, ips: 18 },
+  { label: '12h', alerts: 123, ai: 37, ips: 24 },
+  { label: '15h', alerts: 97, ai: 31, ips: 20 },
+  { label: '18h', alerts: 141, ai: 44, ips: 27 },
+  { label: '21h', alerts: 109, ai: 33, ips: 21 },
 ];
 
 export const topCountries = [

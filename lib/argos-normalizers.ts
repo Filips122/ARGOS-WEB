@@ -516,6 +516,7 @@ function buildEmptyTimeline() {
     label,
     alerts: 0,
     ai: 0,
+    ips: 0,
   }));
 }
 
@@ -533,17 +534,29 @@ function buildTimeline(attacks: Attack[]) {
     label: `${String(index * 3).padStart(2, '0')}h`,
     alerts: 0,
     ai: 0,
+    ips: 0,
   }));
+  const ipsPorTramo = Array.from({ length: 8 }, () => new Set<string>());
 
   let placed = 0;
   for (const attack of attacks) {
     const moment = attack.receivedAt ? new Date(attack.receivedAt) : null;
     if (!moment || Number.isNaN(moment.getTime())) continue;
-    const bucket = buckets[Math.floor(moment.getHours() / 3)];
+    const index = Math.floor(moment.getHours() / 3);
+    const bucket = buckets[index];
     bucket.alerts += 1;
-    if (attack.score >= 70) bucket.ai += 1;
+    // `ai` conserva el nombre por compatibilidad con el tipo, pero ya NO cuenta
+    // el score de ventana: contaba las alertas con score >= 70 y eso era el
+    // 100 % de ellas, asi que las dos series salian identicas y la grafica no
+    // decia nada. Ahora cuenta las alertas cuya IP tiene riesgo >= 0,9, que si
+    // varia entre tramos (medido: del 53 % al 91 %) y separa un pico de volumen
+    // de un pico de peligro.
+    if ((attack.ipRisk?.score ?? 0) >= 0.9) bucket.ai += 1;
+    if (attack.source.ip) ipsPorTramo[index].add(attack.source.ip);
     placed += 1;
   }
+
+  for (const [index, bucket] of buckets.entries()) bucket.ips = ipsPorTramo[index].size;
 
   // Sin marcas de tiempo utilizables no hay distribucion horaria que enseñar.
   return placed === 0 ? buildEmptyTimeline() : buckets;
