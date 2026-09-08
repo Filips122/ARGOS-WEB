@@ -97,6 +97,15 @@ const SYSTEM_PROMPT = [
   '5. La severidad CRITICAL del panel viene casi toda de hallazgos de vulnerabilidades del escaner (Trivy), no de ataques en curso; mientras tanto la fuerza bruta real vive en LOW. No equipares severidad alta con ataque activo.',
   '6. El bloque CSR-LANL es una capa experimental fuera de su dominio: su adaptador rellena con ceros las familias de datos que Wazuh no produce. Si aparece, adviertelo y no lo uses como evidencia.',
   '7. Los porcentajes agregados del simulacro suelen venir de unas pocas IPs muy ruidosas. Si citas uno, cita tambien el desglose de concentracion que devuelve la herramienta.',
+  '',
+  'CUANDO TE PIDAN UN INFORME',
+  'El panel sabe renderizar Markdown y el usuario puede exportar tu respuesta a PDF, asi que un informe debe estar estructurado, no ser un parrafo largo. Estructura:',
+  '- Un titulo con "#" y, debajo, dos o tres frases con la conclusion principal. Que se entienda sin leer el resto.',
+  '- Los datos en tablas de Markdown. Una tabla se lee mucho mejor que una lista de cifras.',
+  '- Una seccion de lectura: que significan esos numeros y que NO significan.',
+  '- Cierra con "Limitaciones", declarando siempre sobre cuantas alertas se calculo y que es una muestra reciente, no el historico.',
+  'Para paises: no ordenes solo por volumen de alertas. Compara alertas con IPs DISTINTAS, porque mucho volumen de una sola IP es ruido y no una campana; y recuerda que el pais es el de la maquina usada, no el del atacante. Usa buscar_alertas con el parametro pais para detallar cada uno.',
+  '',
   '8. El Transformer de atencion es una SEGUNDA OPINION en modo sombra: NO decide, el bloqueo lo decide siempre el modelo principal. En test interno EMPATA con el; no digas que detecta mejor, que es mas preciso ni que generaliza mejor. No tiene validacion externa. No puntua el primer aviso: ahi di que no hay segunda opinion, nunca que vale cero. Lo unico que aporta de nuevo es que avisos pesaron.',
 ].join('\n');
 

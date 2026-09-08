@@ -136,6 +136,55 @@ function segundaOpinion(second: NonNullable<Attack['ipRisk']>['secondOpinion']):
   ].join('\n');
 }
 
+/**
+ * Reparto por pais con el contexto que hace falta para un informe: no basta
+ * "Bulgaria 1.819". Se cuentan IPs distintas (una sola IP muy ruidosa no es
+ * una campana), maquinas alcanzadas, el tipo dominante y cuantas de esas IPs
+ * tienen riesgo alto segun el modelo.
+ *
+ * Todo sale de las alertas ya cargadas: no cuesta ninguna consulta extra.
+ */
+function paisesDetallados(data: LiveData, limite = 8): string {
+  type Fila = { alertas: number; ips: Set<string>; agentes: Set<string>; tipos: Map<string, number>; riesgo: Set<string>; aprox: number };
+  const porPais = new Map<string, Fila>();
+
+  for (const a of data.attacks) {
+    const pais = a.source.country || 'desconocido';
+    let fila = porPais.get(pais);
+    if (!fila) {
+      fila = { alertas: 0, ips: new Set(), agentes: new Set(), tipos: new Map(), riesgo: new Set(), aprox: 0 };
+      porPais.set(pais, fila);
+    }
+    fila.alertas += 1;
+    if (a.source.ip) fila.ips.add(a.source.ip);
+    fila.agentes.add(a.target.name);
+    fila.tipos.set(a.type, (fila.tipos.get(a.type) ?? 0) + 1);
+    if (a.geoApproximate) fila.aprox += 1;
+    if (a.source.ip && a.ipRisk && a.ipRisk.score >= 0.9) fila.riesgo.add(a.source.ip);
+  }
+
+  const orden = [...porPais.entries()].sort((x, y) => y[1].alertas - x[1].alertas).slice(0, limite);
+  const total = data.attacks.length || 1;
+
+  const lineas = orden.map(([pais, f]) => {
+    const tipo = [...f.tipos.entries()].sort((x, y) => y[1] - x[1])[0]?.[0] ?? '-';
+    const pct = ((f.alertas / total) * 100).toFixed(1);
+    const nota = f.aprox > 0 ? `, ${f.aprox} con geo aproximada` : '';
+    return (
+      `  ${pais}: ${f.alertas.toLocaleString('es-ES')} alertas (${pct} %), ` +
+      `${f.ips.size} IP(s) distintas, ${f.riesgo.size} de riesgo alto, ` +
+      `${f.agentes.size} maquina(s) alcanzada(s), tipo dominante "${tipo}"${nota}`
+    );
+  });
+
+  return (
+    lineas.join('\n') +
+    '\n  NOTA: el pais es el de la maquina usada, casi siempre alquilada o comprometida, ' +
+    'no el del atacante. "desconocido" son alertas sin geolocalizar. Compara siempre ' +
+    'alertas con IPs distintas: mucho volumen de una sola IP es ruido, no una campana.'
+  );
+}
+
 function modeNote(data: LiveData): string {
   if (data.mode === 'live') return '';
   if (data.mode === 'demo') {
@@ -197,17 +246,30 @@ server.registerTool(
         .describe('Filtrar por severidad de Wazuh'),
       agente: z.string().optional().describe('Nombre del agente destino'),
       ip: z.string().optional().describe('IP de origen exacta'),
+      pais: z.string().optional()
+        .describe(
+          'Pais o ciudad de origen, por nombre o codigo (ES, Bulgaria, Singapore). ' +
+          'Recuerda que el pais es el de la maquina usada, no el del atacante.'
+        ),
       limite: z.number().int().min(1).max(50).default(10)
         .describe('Cuantas devolver, maximo 50'),
     },
   },
-  async ({ severidad, agente, ip, limite }) => {
+  async ({ severidad, agente, ip, pais, limite }) => {
     try {
       const data = await live();
       let rows = data.attacks;
       if (severidad) rows = rows.filter((a) => a.severity === severidad);
       if (agente) rows = rows.filter((a) => a.target.name.toLowerCase().includes(agente.toLowerCase()));
       if (ip) rows = rows.filter((a) => a.source.ip === ip);
+      if (pais) {
+        const needle = pais.toLowerCase();
+        rows = rows.filter(
+          (a) =>
+            (a.source.country ?? '').toLowerCase().includes(needle) ||
+            (a.source.city ?? '').toLowerCase().includes(needle)
+        );
+      }
 
       if (rows.length === 0) {
         return text('Ninguna alerta coincide con esos filtros.' + modeNote(data));
@@ -335,8 +397,8 @@ server.registerTool(
           'Tipos de ataque:',
           rows('attacksByType'),
           '',
-          'Paises de origen:',
-          rows('topCountries'),
+          'Paises de origen (por volumen de alertas):',
+          paisesDetallados(data),
           '',
           'Tacticas MITRE:',
           rows('mitreTactics'),

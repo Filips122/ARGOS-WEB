@@ -25,7 +25,10 @@ async function main() {
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [SERVER],
-    env: { ...process.env, ARGOS_WEB_URL: process.env.ARGOS_WEB_URL ?? 'http://localhost:3010' },
+    // 3000 es donde sirve `npm run dev`, igual que en .mcp.json. Antes ponia
+    // 3010, que era un puerto de pruebas: el cliente fallaba con "fetch failed"
+    // contra una web que si estaba levantada, en otro puerto.
+    env: { ...process.env, ARGOS_WEB_URL: process.env.ARGOS_WEB_URL ?? 'http://127.0.0.1:3000' },
   });
 
   const client = new Client({ name: 'argos-mcp-test', version: '1.0.0' });

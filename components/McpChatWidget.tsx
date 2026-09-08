@@ -1,6 +1,8 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { MiniMarkdown } from '@/components/MiniMarkdown';
+import { copyReport, downloadMarkdown, printReportAsPdf } from '@/lib/report-export';
 
 type ToolTrace = { name: string; args: Record<string, unknown>; ms: number; chars: number; isError: boolean };
 
@@ -38,6 +40,61 @@ function formatArgs(args: Record<string, unknown>) {
   const entries = Object.entries(args ?? {});
   if (entries.length === 0) return '';
   return entries.map(([key, value]) => `${key}=${String(value)}`).join(', ');
+}
+
+/**
+ * Copiar, .md y PDF sobre una respuesta del asistente.
+ *
+ * Solo en respuestas del asistente: exportar la propia pregunta no tiene
+ * sentido. La traza de herramientas viaja al PDF y al Markdown, porque un
+ * informe suelto que no dice de dónde salen sus cifras no es defendible.
+ */
+function MessageActions({ message }: { message: ChatMessage }) {
+  const [done, setDone] = useState<string | null>(null);
+
+  const meta = {
+    tools: message.toolCalls?.map((call) => ({ name: call.name, args: call.args })),
+    engine: message.engine,
+  };
+
+  function flash(label: string) {
+    setDone(label);
+    window.setTimeout(() => setDone(null), 1800);
+  }
+
+  return (
+    <div className="mcpChatActions">
+      <button
+        type="button"
+        onClick={async () => flash((await copyReport(message.content)) ? 'Copiado' : 'No se pudo copiar')}
+      >
+        Copiar
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          downloadMarkdown(message.content, meta);
+          flash('Descargado .md');
+        }}
+      >
+        .md
+      </button>
+      <button
+        type="button"
+        title="Abre el diálogo de impresión; elige «Guardar como PDF»"
+        onClick={() =>
+          flash(
+            printReportAsPdf(message.content, meta)
+              ? 'Abriendo impresión'
+              : 'Bloqueado por el navegador'
+          )
+        }
+      >
+        PDF
+      </button>
+      {done && <em>{done}</em>}
+    </div>
+  );
 }
 
 export function McpChatWidget() {
@@ -176,9 +233,10 @@ export function McpChatWidget() {
                     ))}
                   </ul>
                 )}
-                {message.content.split('\n').map((line, lineIndex) => (
-                  <p key={lineIndex}>{line}</p>
-                ))}
+                <MiniMarkdown text={message.content} />
+                {message.role === 'assistant' && message.content.trim().length > 0 && (
+                  <MessageActions message={message} />
+                )}
               </div>
             ))}
             {loading && (

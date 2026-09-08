@@ -1167,3 +1167,103 @@ button.wazuhAlertRow:hover {
   margin-left: 4px;
   color: rgba(126, 168, 184, 0.75);
 }
+
+/* Markdown dentro de una burbuja del chat. El panel es estrecho: las tablas
+   scrollean en su propio contenedor en vez de desbordar la burbuja. */
+.mdBody h3, .mdBody h4, .mdBody h5 {
+  margin: 9px 0 4px;
+  color: #d9f6fb;
+  line-height: 1.25;
+}
+.mdBody h3 { font-size: 0.86rem; }
+.mdBody h4 { font-size: 0.79rem; }
+.mdBody h5 { font-size: 0.74rem; color: rgba(217, 246, 251, 0.82); }
+.mdBody > *:first-child { margin-top: 0; }
+.mdBody ul, .mdBody ol {
+  margin: 5px 0;
+  padding-left: 17px;
+  color: #d9f6fb;
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+.mdBody li { margin: 2px 0; }
+.mdBody code {
+  background: rgba(126, 168, 184, 0.16);
+  color: #38f8d4;
+  padding: 0 3px;
+  font-size: 0.72rem;
+}
+.mdBody pre {
+  margin: 6px 0;
+  padding: 7px 8px;
+  overflow-x: auto;
+  background: rgba(10, 22, 30, 0.6);
+  border: 1px solid rgba(126, 168, 184, 0.18);
+  color: #b9e6f2;
+  font-size: 0.7rem;
+  line-height: 1.35;
+}
+.mdBody blockquote {
+  margin: 7px 0;
+  padding: 5px 8px;
+  border-left: 2px solid rgba(56, 248, 212, 0.4);
+  background: rgba(126, 168, 184, 0.07);
+  color: rgba(217, 246, 251, 0.85);
+  font-size: 0.74rem;
+  line-height: 1.4;
+}
+.mdBody hr {
+  border: 0;
+  border-top: 1px solid rgba(126, 168, 184, 0.2);
+  margin: 9px 0;
+}
+.mdTableWrap {
+  margin: 7px 0;
+  overflow-x: auto;
+}
+.mdBody table {
+  border-collapse: collapse;
+  min-width: 100%;
+  font-size: 0.7rem;
+}
+.mdBody th, .mdBody td {
+  border: 1px solid rgba(126, 168, 184, 0.22);
+  padding: 3px 6px;
+  text-align: left;
+  white-space: nowrap;
+  color: #d9f6fb;
+}
+.mdBody th {
+  background: rgba(126, 168, 184, 0.12);
+  font-weight: 600;
+  color: rgba(217, 246, 251, 0.95);
+}
+
+/* Barra de exportacion de una respuesta. */
+.mcpChatActions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px dashed rgba(126, 168, 184, 0.2);
+}
+.mcpChatActions button {
+  padding: 2px 7px;
+  border: 1px solid rgba(126, 168, 184, 0.3);
+  background: transparent;
+  color: rgba(217, 246, 251, 0.85);
+  font-size: 0.64rem;
+  font-family: inherit;
+  cursor: pointer;
+}
+.mcpChatActions button:hover {
+  border-color: rgba(56, 248, 212, 0.55);
+  color: #38f8d4;
+}
+.mcpChatActions em {
+  margin-left: auto;
+  font-style: normal;
+  font-size: 0.62rem;
+  color: #38f8d4;
+}
