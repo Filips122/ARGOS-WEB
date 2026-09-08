@@ -22,15 +22,11 @@ procedencia y cada concepto se explica antes de usarse.
 | **II · La plataforma** | 8–20 | La herramienta construida; limitaciones en 19.2 y 19.3 |
 | **III · Cierre** | 21–23 | Trabajo futuro, reproducibilidad y qué no se puede afirmar |
 
-**Lo que este documento NO absorbe**, por ser de otra naturaleza:
-
-| Fichero | Qué aporta |
-|---|---|
-| `deploy/argos_scorer/README.md` | El porqué de cada decisión del paquete de modelos (R1–R13) |
-| `WAZUH.md` | Montaje de la infraestructura: manager, indexer, agentes |
-| `CONTEXT.md` | Historia del proyecto y decisiones de arquitectura |
-| `experiments/results/*.json` | Cifras crudas de ablación, LOAO y KEV/EPSS |
-| `CSR_LANL_*.md` | La capa experimental de transferencia entre dominios |
+**Es autosuficiente.** No hace falta leer ningún otro fichero del repositorio
+para redactar la memoria: el porqué de cada decisión de modelado, el montaje
+experimental, los resultados y los límites están aquí. Los ficheros del
+repositorio que se citan lo son como **procedencia del dato** —de dónde salió
+una cifra, qué comando la reproduce—, nunca como lectura obligatoria.
 
 > **Advertencia que gobierna todo el documento.** La aportación de este trabajo
 > son en buena parte **resultados negativos**. Redactarlo como si se hubiera
@@ -86,6 +82,63 @@ solicitado**: no hay simulación de ataques.
 | Índice | `wazuh-alerts-*`, ~56,5 M documentos |
 
 Producido por `GET /api/argos/dataset` (ver `lib/dataset-export.ts`).
+
+### 2.1 El montaje experimental
+
+**Qué se desplegó.** Wazuh completo sobre máquinas reales expuestas a internet:
+
+| Componente | Papel |
+|---|---|
+| **Wazuh Manager** | Recibe la telemetría de los agentes, aplica el motor de reglas y expone una API REST. |
+| **Wazuh Indexer** (OpenSearch) | Almacena las alertas indexadas. Índice `wazuh-alerts-*`, ~56,5 M documentos. |
+| **Agentes** | 20 en inventario, 4 activos en el momento de medir. Incluyen un **honeypot** (T-Pot/Cowrie) y servidores Linux de servicio. |
+| **Escáner de vulnerabilidades** (Trivy) | Inventaría paquetes con CVE conocido. Genera alertas sin atacante. |
+
+**Por qué importa que sean máquinas reales.** El tráfico hostil es **real y no
+solicitado**: no hay simulación de ataques ni inyección de tráfico. Eso da
+validez externa al fenómeno observado, pero también impone la limitación
+central del trabajo — no hay forma de saber qué tráfico *legítimo* hubo, porque
+Wazuh solo indexa lo que dispara una regla.
+
+**La heterogeneidad de fuentes es parte del problema.** Conviven en el mismo
+índice dos poblaciones que no se parecen:
+
+- **Alertas con atacante**: fuerza bruta SSH, escaneo, spraying. Tienen IP de
+  origen, usuario probado, puerto. Son sobre las que se puede decidir un
+  bloqueo.
+- **Alertas sin atacante**: hallazgos del escáner de vulnerabilidades y eventos
+  del sistema. No tienen IP de origen. **Ninguna decisión de bloqueo aplica.**
+
+La proporción entre ambas **oscila mucho** según lo que domine la ventana
+observada: medido entre el 2 % y el 82 % sin dirección de origen en distintos
+refrescos. Cualquier métrica agregada sobre «las alertas» sin distinguirlas es
+engañosa, y esa es una de las razones de la regla de desglose obligatorio
+(§6.3).
+
+### 2.2 Consideraciones de seguridad del despliegue
+
+Reglas que se impusieron al construir la aplicación, relevantes porque una
+herramienta de seguridad mal construida es una vulnerabilidad más:
+
+1. **Ninguna llamada a Wazuh desde el navegador.** Todo pasa por rutas de
+   servidor; las credenciales nunca llegan al cliente.
+2. **Credenciales solo en variables de entorno** (`.env.local`, fuera del
+   control de versiones). Ni usuario, ni contraseña, ni token, ni IP sensible
+   escritos en el código.
+3. **Los endpoints internos devuelven datos ya filtrados y normalizados**, no
+   la respuesta cruda de Wazuh, que contiene campos que no deben salir.
+4. **El sidecar de modelos escucha solo en loopback** y rechaza arrancar con
+   `--host 0.0.0.0` (comprobación automatizada en su batería de pruebas). Es un
+   proceso que decide bloqueos: no debe ser alcanzable desde la red.
+5. **`NODE_TLS_REJECT_UNAUTHORIZED=0` solo en laboratorio** y documentado,
+   porque el Wazuh de pruebas usa certificado autofirmado. En producción sería
+   inaceptable.
+6. **El asistente conversacional lanza un agente local**, acotado a siete
+   herramientas de solo lectura con las de escritura denegadas explícitamente.
+   Aun así, la aplicación no debe exponerse fuera de localhost con ese motor
+   activo (§18.1).
+
+---
 
 ### El problema de las etiquetas
 
@@ -167,6 +220,101 @@ El efecto es medible y es el argumento más fuerte del trabajo:
 | Conductual (esta) | retiene el **65–104 %** |
 
 > **El problema nunca fue el modelo: era la pregunta.** Esa frase resume el TFM.
+
+---
+
+### 4.1 Los cuatro servicios que resultaron, y sus garantías medidas
+
+El paquete de modelos expone cuatro servicios. Los tres primeros están en
+producción; el cuarto, en modo sombra.
+
+#### `EarlyBlockScorer` — bloqueo temprano de IPs (el principal)
+
+Mantiene el perfil de cada dirección y, con cada aviso, reevalúa. En los
+presupuestos **K = 1, 2, 3, 5, 10, 20** avisos puntúa con el modelo de ese K y
+**bloquea al primer cruce de umbral**. Convierte un IDS en un IPS: cada acierto
+temprano suprime todo lo que esa IP habría generado después.
+
+| Métrica | Interno (mes de test) | Externo (otro entorno, un disparo) |
+|---|---|---|
+| Recall de IPs bloqueables | **0,990** | **0,994** |
+| Precisión | **0,995** (3 falsos al mes) | ≥ 0,898 (suelo por censura de 11 h) |
+| Mediana de corte | 5.º aviso | 5.º aviso |
+| Volumen de ataque evitado | **89 %** | 91 % |
+
+Devuelve, además del score, la **evidencia**: cuentas probadas, máquinas
+alcanzadas y reputación de la subred. El analista ve *por qué*, no solo un
+número.
+
+#### `WindowBlockScorer` — probabilidad de bloqueo por ventana
+
+Puntúa un minuto completo de un agente. Medido: **lift 43,5× / 20,0×** dentro
+de cada host; transferido a otro host retiene el **65–104 %**; validación
+externa **MCC 0,343** en hosts jamás vistos, frente a **0,000** de la
+aproximación anterior con etiqueta débil.
+
+#### `ActivityScorer` — familia de actividad con rechazo
+
+Clasifica la ventana en su familia (`CredentialBrute`, `SshOperational`,
+`PortChange`, `AgentHealth`…), con **un modelo por host**, probabilidades
+calibradas por regresión isotónica y **rechazo de actividad desconocida**: si la
+confianza cae bajo el umbral del host devuelve `is_unknown`, que va a cola de
+revisión humana. Medido: el rechazo captura hasta el **99,8 %** de una familia
+de ataque nunca vista.
+
+#### `AttentionBlockScorer` / `ConsensusBlockScorer` — segunda opinión
+
+Encoder de atención (2 bloques pre-LN, 4 cabezas, d = 32, ~18.369 parámetros
+por K), con la secuencia de los primeros K avisos como fichas e inferencia en
+**numpy puro** — el paquete sigue sin PyTorch. Cada construcción verifica que
+numpy reproduce al modelo entrenado: **máx. |diff| 3,5·10⁻⁷** en 3.595
+evaluaciones.
+
+| Política | Recall | Precisión | Legítimas cortadas/mes | Ataque evitado |
+|---|---|---|---|---|
+| HGB (el principal) | 0,990 | 0,995 | 3 | 89,3 % |
+| Atención sola | 0,992 | 0,992 | 5 | 90,2 % |
+| Consenso **OR** | 0,995 | 0,990 | 6 | 93,9 % |
+| Consenso **AND** | 0,985 | **0,997** | **2** | 85,5 % |
+
+**Todas cortan en la mediana del 5.º aviso.** Test interno, **sin validación
+externa**: el presupuesto está gastado (§5).
+
+> **`K = 1` está excluido a propósito.** Ahí el Transformer ordena mejor
+> (AUC 0,86 frente a 0,83), pero su umbral **no traslada de validación a test**
+> y la política cae a precisión 0,976, por debajo del 0,99 exigido. Se prefiere
+> no opinar a opinar mal.
+
+> **No se pueden ejecutar los dos a la vez sobre el mismo estado vivo**: cada
+> uno registraría la IP como hostil y la reputación de subred contaría doble.
+> Para combinarlos existe `ConsensusBlockScorer`, que comparte perfil y estado.
+
+### 4.2 Por qué la política es secuencial
+
+A presupuesto fijo —decidir con exactamente 5 avisos— el recall era **0,82**. La
+mejora **no vino de un modelo mejor sino del planteamiento**: reevaluar con cada
+aviso y bloquear al primer cruce lleva el recall a **0,990** manteniendo la
+mediana en el 5.º aviso.
+
+La **reputación causal de subred** aporta lo que ningún agregado propio puede:
+sospechar de una IP **desde su primer aviso** si su /24 ya produjo hostiles. Las
+botnets se agrupan en rangos.
+
+Y los umbrales se fijan a **precisión ≥ 0,99**, no a F1 óptimo, porque bloquear
+a un legítimo cuesta más que dejar pasar avisos. **El mando es la precisión.**
+
+### 4.3 Inventario de modelos
+
+| Fichero | Servicio | Entrenamiento |
+|---|---|---|
+| `early_block_K{1,2,3,5,10,20}.joblib` | EarlyBlockScorer | 3.354 IPs (train), umbral p99 sobre 719 IPs (validación) |
+| `window_block.joblib` | WindowBlockScorer | 56.883 ventanas, calibrado isotónico |
+| `activity_scorer.joblib` | ActivityScorer | Por host (000/011/030) + global, calibrado y con rechazo |
+| `attention_block.npz` | AttentionBlockScorer | 5 transformers (K = 2, 3, 5, 10, 20), mismas 3.354 IPs; 414 KB |
+| `config.json` | Todos | Listas de variables (**el orden manda**), umbrales y notas de validación |
+
+**Semilla 42 en todo. Reproducible de extremo a extremo.** Peso total de los
+modelos: **6,6 MB**, sin GPU, inferencia en microsegundos.
 
 ---
 
@@ -276,6 +424,45 @@ firma de un clasificador que decide sí o no, no «cuánto».
 Consecuencia práctica: promediarlo daba un «nivel de riesgo» que **no describía
 a ninguna alerta**. Por eso el panel migró al riesgo por IP (49 valores
 distintos, media 91,4).
+
+---
+
+### 6.6 CSR-LANL: la transferencia entre dominios que no funcionó
+
+**Qué se intentó.** Si el laboratorio no tiene clase benigna real, ¿serviría un
+modelo entrenado sobre un corpus público que **sí** tiene verdad de campo? Se
+integró CSR-LANL: registros de autenticación, flujos de red, DNS y procesos, con
+actividad de **equipo rojo auténtico** etiquetada. Trabaja con **209
+características sobre ventanas de una hora agrupadas por entidad**, sobre
+**13,1 millones de ventanas** y **16.155 entidades**.
+
+**Qué se midió, en dos planos.**
+
+*En su propio dominio*, las variables conductuales dan señal genuina frente a
+compromisos reales: **ROC-AUC 0,96**. Pero a prevalencia 10⁻⁵ eso no basta:
+**PR-AUC 0,0168** y precisión entre los cincuenta primeros resultados de
+**0,040** — dos aciertos por cada cincuenta revisiones. Es el recordatorio de por
+qué ROC-AUC engaña con clases muy desbalanceadas.
+
+*Trasladado a ARGOS*, no es interpretable. El paquete exige las mismas 209
+columnas y trata las ausentes como error de esquema; Wazuh **no produce** esas
+familias de datos, así que el adaptador **rellena con cero** todo lo que falta.
+Su propia salida lo declara: *«CSR-LANL model was trained on auth/flow/dns/proc
+windows; ARGOS Wazuh adapter fills unavailable feature families with zero»*.
+
+**Un modelo que recibe la mayoría de sus entradas a cero opera fuera de su
+dominio.** Medido en vivo: el **100 %** de las entidades salen como
+`low_signal`.
+
+**Por qué se conserva visible.** Porque documenta una decisión del trabajo
+—probar transferencia entre dominios y **medir que no funciona**— no porque
+aporte señal. Es el tercer resultado negativo del trabajo, junto al autoencoder
+(§6.3) y a los tres empates del aprendizaje profundo (§6.4). En la memoria vale
+más como evidencia de método que como funcionalidad.
+
+> Aviso de redacción: **no presentar CSR-LANL como una capa de detección
+> operativa.** Sus cuatro campos aparecen en la ficha de detalle (§11.1) con la
+> advertencia correspondiente, y ahí debe quedarse.
 
 ---
 
@@ -1624,6 +1811,20 @@ Y las corregidas en la primera pasada de auditoría:
 
 Ordenadas por gravedad. La primera es estructural y condiciona a las demás.
 
+**Limitaciones propias del paquete de modelos**, además de las de la lista:
+
+- **La etiqueta es conducta, no verdad absoluta.** Los criterios de bloqueo
+  (§4) son una heurística razonable y auditada, no un juicio humano.
+- **Entrenado en una sola instalación**: 4 hosts Linux, 30 días. La validación
+  externa cubre un segundo entorno de **11 horas**; más allá de eso, habría que
+  reentrenar con datos propios.
+- **La precisión externa 0,898 es un suelo, no una medida.** De los 38
+  «falsos» del cruce externo, **29 eran atacantes a uno o dos usuarios de
+  cumplir los criterios** cuando la captura terminó. La cifra real está entre
+  0,898 y ~1,0, y no se puede estrechar sin captura nueva.
+- **La demo del paquete puntúa alertas del periodo de entrenamiento**: sus
+  scores son ilustrativos, no una métrica.
+
 1. **No hay clase benigna real.** Wazuh solo indexa lo que dispara una regla.
    El negativo sale de etiquetado débil más un simulador sintético. **Sin
    benignos reales no se puede afirmar nada sobre falsos positivos**, y un SOC
@@ -1702,21 +1903,67 @@ modelos vienen del repositorio de investigación y están marcadas
 
 ## 21. Trabajo futuro
 
-`FUTURE_WORK.md` propone una arquitectura de fusión con cinco modelos
-especialistas y un `TabTransformer`. **Esa propuesta debe recortarse en la
-memoria**, y decirlo es más fuerte que mantenerla: proponer una capa de fusión
-sobre modelos cuya clase negativa no existe es diseñar el tejado antes que los
-cimientos, y un tribunal lo señalará.
+### 21.1 Lo que se llegó a proponer, y por qué debe recortarse
 
-El orden defendible es:
+Durante el proyecto se diseñó una arquitectura ambiciosa: **cinco modelos
+especialistas** —LAB-ALERTS binario, LAB-ALERTS multiclase, Cowrie para
+honeypot, CSR-LANL para anomalía de entidad y modelos de flujo de red sobre
+CIC-IDS / UNSW-NB15 / UGR-16— coronados por un **meta-modelo de fusión** que
+combinase sus salidas en un `final_soc_risk`, y a más largo plazo un
+`TabTransformer` o `FT-Transformer` sobre secuencias de ventanas.
+
+El razonamiento que la sostenía es correcto y merece figurar en la memoria:
+**los datasets tienen naturalezas distintas** —alertas SIEM, honeypot SSH,
+flujos de red, comportamiento por entidad— y mezclarlos directamente produciría
+un modelo incoherente, porque las variables no representan lo mismo ni las
+etiquetas significan lo mismo. De ahí la idea de especialistas por dominio más
+una capa de fusión.
+
+**Pero esa propuesta debe recortarse**, y decirlo es más fuerte que mantenerla.
+Tres razones medidas en este mismo trabajo:
+
+1. **La clase negativa no existe** (§19.3). Una capa de fusión sobre modelos
+   cuya precisión no se puede medir multiplica lo inmedible.
+2. **El aprendizaje profundo empató tres veces** (§6.4). Proponer un cuarto
+   intento con `TabTransformer` sin haber cambiado la naturaleza de los datos
+   ignora la propia evidencia del trabajo.
+3. **Los modelos de red no tienen datos.** Requieren `src_port`, `duration`,
+   `bytes`, `packets`, `flags`, `connection_state`… que exigirían integrar
+   Suricata, Zeek o NetFlow. **Ninguno está desplegado.**
+
+Un tribunal preguntará por qué se diseña el tejado antes que los cimientos.
+
+### 21.2 El orden defendible
 
 1. **Recuperar la clase benigna.** Activar `logall_json`, indexar
-   `wazuh-archives-*` y generar actividad administrativa real durante una
-   semana. Es la precondición de todo lo demás.
-2. **Repetir la ablación** con benignos reales y medir falsos positivos.
-3. **Ejecutar el modo sombra** durante semanas para convertir el acuerdo entre
-   modelos en una serie temporal.
-4. **Solo entonces**, plantear fusión.
+   `wazuh-archives-*` y generar actividad administrativa real —inicios de sesión
+   correctos, `sudo`, copias de seguridad, actualizaciones de paquetes,
+   mantenimiento programado— durante al menos una semana. **Es la precondición
+   de todo lo demás**, y es barato: un cambio de configuración más tiempo de
+   recogida.
+2. **Repetir la ablación y el LOAO** con esos benignos, y **medir falsos
+   positivos por primera vez**. Solo entonces se puede afirmar algo sobre
+   precisión operativa.
+3. **Ejecutar el modo sombra** durante semanas (§19.3, limitación 5) para
+   convertir el acuerdo entre los dos modelos en una **serie temporal** en vez
+   de fotos sueltas. Es además la única validación que le queda al Transformer.
+4. **Reentrenar por agente** los hosts que hoy no tienen modelo propio: se
+   necesitan ≥ 200 ventanas por agente.
+5. **Solo entonces**, plantear la fusión — y con una primera versión simple
+   (regresión logística o HistGradientBoosting sobre las salidas), no un
+   Transformer.
+
+### 21.3 Extensiones que sí están listas para plantearse
+
+- **Cowrie / honeypot**: activación condicional cuando la alerta venga
+  claramente de honeypot (`decoder.name`, `location` o descripción). Sería
+  enriquecimiento del detalle, **nunca** detector general.
+- **Umbral adaptativo a la prevalencia del destino**, sin etiquetas: validado
+  en el paquete (K = 5: recall 0,846 → 0,900). Disponible como ajuste si la
+  mezcla de tráfico difiere mucho de la captura de entrenamiento.
+- **Promoción del bloqueo a real**: requiere el ledger del modo sombra con cero
+  veredictos sobre infraestructura propia durante el periodo, y aprobación
+  humana explícita.
 
 ---
 
@@ -1727,7 +1974,7 @@ El orden defendible es:
 | Ablación y LOAO (§6.1, §6.2) | `python experiments/shortcut_ablation.py` → `experiments/results/shortcut_ablation.json` |
 | KEV/EPSS, 243× (§7) | `python experiments/kev_epss_filter.py` → `experiments/results/kev_epss_filter.json` |
 | Volcado de 1.462.265 alertas (§2) | `GET /api/argos/dataset` |
-| Métricas del paquete (§4, §5 de este documento) | Secciones 2 y 4 de `deploy/argos_scorer/README.md`; registro canónico R1–R13 en el repositorio de investigación |
+| Métricas del paquete (§4.1–4.3, §5) | Ya están transcritas en este documento. Procedencia original: secciones 2 y 4 de `deploy/argos_scorer/README.md` y el registro R1–R13 del repositorio de investigación |
 | Cifras del panel en vivo (§6.5, §14, §19.1) | `GET /api/argos/live` |
 | Simulacro y políticas | `GET /api/argos/simulation?policy=hgb\|attention\|or\|and` |
 | Estado de los modelos | `GET http://127.0.0.1:8973/health` |
