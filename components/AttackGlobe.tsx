@@ -579,7 +579,7 @@ export function AttackGlobe({
             <span role="columnheader">IP origen</span>
             <span role="columnheader">Destino</span>
             <span role="columnheader">Regla</span>
-            <span role="columnheader">AI Score</span>
+            <span role="columnheader" title="Riesgo de bloqueo de la IP de origen, 0-100">Riesgo IP</span>
             <span role="columnheader">Class</span>
           </div>
           {pipelineAlerts.map((attack) => (
@@ -598,8 +598,23 @@ export function AttackGlobe({
               <span role="cell">{attack.source.ip ?? 'unknown'}</span>
               <span role="cell">{attack.target.name}</span>
               <span role="cell">{attack.wazuhRule}</span>
-              <span role="cell" title={attack.ai ? `${attack.ai.modelId} - ${attack.ai.prediction}` : 'Heuristica Wazuh'}>
-                {attack.score}
+              {/* Riesgo de la IP, no el score de ventana. El de ventana puntua
+                  el minuto del agente y lo reparte igual entre todas sus
+                  alertas: satura y no distingue entre atacantes. Este si.
+                  Vive ahora en la ficha de detalle, no en la tabla.
+                  El 2 % de alertas sin IP de origen (Trivy, syscheck) no tienen
+                  a quien puntuar: se marcan con guion, no con un cero. */}
+              <span
+                role="cell"
+                className={attack.ipRisk ? `ipScoreCell ${attack.ipRisk.score >= 0.9 ? 'alto' : attack.ipRisk.score >= 0.6 ? 'medio' : 'bajo'}` : 'ipScoreCell none'}
+                title={
+                  attack.ipRisk
+                    ? `${attack.ipRisk.usersTried} cuenta(s), ${attack.ipRisk.agentsReached} maquina(s)` +
+                      (attack.ipRisk.blocked ? `, bloquearia en el aviso ${attack.ipRisk.decidedAtAlert}` : '')
+                    : 'Sin IP de origen: no hay direccion a la que puntuar'
+                }
+              >
+                {attack.ipRisk ? Math.round(attack.ipRisk.score * 100) : '—'}
               </span>
               <span role="cell" className={`classificationCell ${attack.ai?.prediction ?? 'unknown'}`}>
                 {attack.ai?.prediction ?? 'unknown'}

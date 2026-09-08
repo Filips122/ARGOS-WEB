@@ -573,18 +573,55 @@ function buildKpis(
   const critical = attacks.filter((attack) => attack.severity === 'critical').length;
   const activeAgents = agents.filter((agent) => agent.status === 'active').length;
   const disconnectedAgents = agents.filter((agent) => agent.status !== 'active').length;
-  const meanScore = attacks.length
-    ? Math.round(attacks.reduce((sum, attack) => sum + attack.score, 0) / attacks.length)
-    : 0;
+  const { mean: meanScore } = meanIpScore(attacks);
+  // Por DIRECCION, no por alerta: hay unas decenas de IPs generando miles de
+  // alertas, asi que contar alertas aqui daria un numero enorme bajo una
+  // etiqueta que dice "IPs". Seria la misma clase de metrica enganyosa que el
+  // panel ha ido retirando.
+  const ips = new Map<string, number>();
+  for (const attack of attacks) {
+    const score = ipScore(attack);
+    if (attack.source.ip && score !== null) ips.set(attack.source.ip, score);
+  }
+  const highRisk = [...ips.values()].filter((score) => score >= 90).length;
 
   return [
     { label: 'Eventos 24h', value: totalEvents24h.toLocaleString('es-ES'), trend: 'Wazuh', tone: 'info' },
     { label: 'Alertas correladas', value: totalAlerts30d.toLocaleString('es-ES'), trend: `${loadedAlerts30d.toLocaleString('es-ES')} cargadas`, tone: 'info' },
-    { label: 'Anomalias IA', value: attacks.filter((attack) => attack.score >= 70).length.toString(), trend: `media ${meanScore}`, tone: 'ai' },
+    // Contaba alertas con score de ventana >= 70, que lo cruzaba el 100 % de
+    // ellas: el KPI no filtraba nada. Ahora cuenta las de IPs con riesgo >= 90.
+    { label: 'IPs de riesgo alto', value: highRisk.toLocaleString('es-ES'), trend: `de ${ips.size.toLocaleString('es-ES')} direcciones`, tone: 'ai' },
     { label: 'Criticas', value: critical.toString(), trend: critical > 0 ? 'prioridad' : 'estable', tone: 'critical' },
     { label: 'Agentes activos', value: activeAgents.toString(), trend: `${disconnectedAgents} off`, tone: activeAgents > 0 ? 'ok' : 'high' },
-    { label: 'AI Risk', value: meanScore.toString(), trend: meanScore >= 80 ? 'high' : 'guarded', tone: meanScore >= 80 ? 'high' : 'info' },
+    { label: 'Riesgo IP medio', value: meanScore.toString(), trend: meanScore >= 80 ? 'high' : 'guarded', tone: meanScore >= 80 ? 'high' : 'info' },
   ];
+}
+
+/**
+ * Puntuacion por alerta que se usa en KPIs, medias y reparto de riesgo: la del
+ * RIESGO DE LA IP, no la del modelo de ventana.
+ *
+ * El de ventana puntua un minuto de un agente y reparte el mismo numero entre
+ * todas las alertas de dentro; medido, satura: 13 valores distintos sobre
+ * 10.001 alertas, el 96,8 % exactamente 100, media 99,6. Promediarlo daba un
+ * numero que no describia a ninguna alerta.
+ *
+ * El de IP puntua la conducta de la direccion: 49 valores distintos y media
+ * 91,4 sobre la misma muestra. Solo existe donde hay IP de origen (medido:
+ * 98,0 % de las alertas); el resto se EXCLUYE del promedio en vez de contar
+ * como cero, que hundiria la media con alertas que no tienen a quien puntuar.
+ */
+function ipScore(attack: Attack): number | null {
+  return attack.ipRisk ? Math.round(attack.ipRisk.score * 100) : null;
+}
+
+function meanIpScore(attacks: Attack[]): { mean: number; scored: number } {
+  const scores = attacks.map(ipScore).filter((value): value is number => value !== null);
+  if (scores.length === 0) return { mean: 0, scored: 0 };
+  return {
+    mean: Math.round(scores.reduce((sum, value) => sum + value, 0) / scores.length),
+    scored: scores.length,
+  };
 }
 
 function getRiskTone(max: number): RiskBucket['tone'] {
@@ -602,13 +639,19 @@ function buildRiskDistribution(attacks: Attack[]): RiskBucket[] {
   });
 
   return ranges.map(({ min, max }, index) => {
+    // Reparto del riesgo de IP. Con el score de ventana este histograma tenia
+    // forma de U (todo en el primer y el ultimo tramo) porque el modelo decide
+    // si o no, no "cuanto".
     const inRange = attacks.filter((attack) => {
+      const score = ipScore(attack);
+      if (score === null) return false;
       const isLastRange = index === ranges.length - 1;
-      return attack.score >= min && (isLastRange ? attack.score <= max : attack.score < max);
+      return score >= min && (isLastRange ? score <= max : score < max);
     });
     const scoreCounts = Array.from(
       inRange.reduce((counts, attack) => {
-        counts.set(attack.score, (counts.get(attack.score) ?? 0) + 1);
+        const score = ipScore(attack) as number;
+        counts.set(score, (counts.get(score) ?? 0) + 1);
         return counts;
       }, new Map<number, number>()),
       ([score, count]) => ({ score, count })
@@ -660,9 +703,7 @@ function buildLiveAgentHealth(
   ).length;
   const approximateGeo = attacks.filter((attack) => attack.geoApproximate).length;
   const flowsPerMinute = Math.round(totalEvents24h / (24 * 60));
-  const meanScore = attacks.length
-    ? Math.round(attacks.reduce((sum, attack) => sum + attack.score, 0) / attacks.length)
-    : 0;
+  const { mean: meanScore } = meanIpScore(attacks);
 
   return [
     {

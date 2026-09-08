@@ -1382,3 +1382,10 @@ button.wazuhAlertRow:hover {
 .stackLegend i { width: 9px; height: 9px; display: inline-block; }
 .stackLegend .swRisk { background: var(--cyan); }
 .stackLegend .swRest { background: #4a6473; }
+
+/* Columna de riesgo por IP en la tabla de alertas. El guion marca las que no
+   tienen IP de origen: no hay direccion a la que puntuar, no es un cero. */
+.ipScoreCell.alto { color: var(--cyan); }
+.ipScoreCell.medio { color: var(--yellow); }
+.ipScoreCell.bajo { color: var(--muted); }
+.ipScoreCell.none { color: rgba(126, 168, 184, 0.45); }

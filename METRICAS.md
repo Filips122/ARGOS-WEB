@@ -36,7 +36,7 @@ a 4,3 s por refresco).
 | `MANAGER` | **[real]** | `ONLINE`/`OFFLINE` según responda `/manager/info`. |
 | `INDEXER` | **[real]** | Si la consulta de alertas al Indexer tuvo éxito. |
 | `ALERTAS` | **[real]** | Alertas cargadas en este refresco. |
-| `AI SCORE` | **[derivado]** | Media del `score` de las alertas cargadas. Es el mismo número que el KPI `AI Risk`; ver § 6.1 para por qué no debe leerse como nivel de riesgo. |
+| `RIESGO IP` | **[derivado]** | Media del **riesgo por IP** de las alertas que tienen dirección de origen. Antes era `AI SCORE`, la media del score de ventana, que saturaba en 99,6. Ver § 6.1. |
 | `THREAT` | **[derivado]** | `HIGH` si hay más de una alerta crítica, si no `ELEVATED`. |
 
 > **Sobre `THREAT`.** El *nivel de amenaza* es una convención de los centros de
@@ -120,7 +120,19 @@ resto del panel sigue trabajando con las 10.000 alertas cargadas.
 
 Ocho columnas, paginadas de diez en diez:
 
-`SEVERIDAD` · `TIPO` · `ORIGEN` · `IP` · `DESTINO` · `REGLA` · `AI SCORE` · `CLASIFICACIÓN`
+`SEVERIDAD` · `TIPO` · `ORIGEN` · `IP` · `DESTINO` · `REGLA` · `RIESGO IP` · `CLASIFICACIÓN`
+
+> **La columna de puntuación cambió.** Mostraba el `AI Score` de ventana; ahora
+> muestra el **riesgo de la IP de origen**. El de ventana puntúa el minuto del
+> agente y reparte el mismo número entre todas sus alertas: sobre 10.001
+> alertas daba **13 valores distintos**, con el 96,8 % en exactamente 100. El de
+> IP da **49**. Una columna en la que casi todas las filas ponen lo mismo no
+> ayuda a priorizar, que es para lo que existe una tabla ordenable.
+>
+> El score de ventana **no se ha eliminado**: vive en la ficha de detalle, donde
+> hay sitio para explicar qué es. El **2,0 %** de alertas sin IP de origen
+> (Trivy, syscheck) muestran **`—`**, no un cero: no hay dirección a la que
+> puntuar, que es distinto de puntuar bajo.
 
 Al pulsar una fila se abre la **ficha de detalle**, documentada en la sección
 3.1.
@@ -457,23 +469,24 @@ millones de incidentes.
 
 ---
 
-#### `Anomalías IA` — 4.589, media 47 **[derivado]**
+#### `IPs de riesgo alto` — 52 de 100 direcciones **[derivado]**
 
-**Qué es.** Una *anomalía*, en detección, es una observación que se aparta del
-comportamiento normal aprendido. La palabra implica normalmente un método **no
-supervisado**: el modelo aprende qué es normal y marca lo que se sale, sin que
-nadie le haya dicho qué es un ataque.
+**Qué es.** Cuántas de las direcciones vistas superan el umbral de riesgo alto
+(≥ 90 sobre 100) según el modelo de bloqueo por IP.
 
-**Qué aporta aquí, y por qué el nombre no es correcto.** Esto **no es una
-detección de anomalías**. Es un recuento con umbral: alertas cuyo score de
-ventana supera 70. El modelo que lo produce es **supervisado** — se entrenó con
-etiquetas de ataque y benigno—, así que lo que cuenta la tarjeta es «cuántas
-ventanas clasificó el modelo como ataque con confianza alta», que es otra cosa.
+**Qué aporta aquí.** Es la **cola de trabajo real**: no cuántas alertas hay,
+sino a cuántos *atacantes distintos* habría que mirar. Medido: **52 de 100**
+direcciones. Esa es una lista revisable por una persona; 10.001 alertas no.
 
-Lo que sí aporta: es la **medida del filtrado**. De 10.001 alertas, 4.589
-superan el umbral. Un analista que solo mire esas revisa el 46 % del volumen.
-Ese es el ahorro real que ofrece la capa de IA — y también su límite, porque
-reducir a la mitad sigue siendo inasumible a 37 alertas por minuto.
+> **Qué había antes: `Anomalías IA`.** Contaba las alertas cuyo score de ventana
+> superaba 70 — y ese umbral **lo cruzaba el 100 % de ellas**, así que el KPI no
+> filtraba nada. El nombre además era incorrecto: una *anomalía* implica un
+> método **no supervisado** (aprender lo normal y marcar lo que se sale), y ese
+> modelo es supervisado.
+>
+> Se cuenta por **dirección, no por alerta**. Contando alertas salían 6.451 bajo
+> una etiqueta que dice «IPs», cuando hay un centenar de direcciones: unas
+> decenas de IPs generan miles de alertas.
 
 ---
 
@@ -511,32 +524,28 @@ precisamente para que no se pueda leer solo el bueno.
 
 ---
 
-#### `AI Risk` — 47, `guarded` **[derivado]**
+#### `Riesgo IP medio` — 91 **[derivado]**
 
-**Qué es.** Un *nivel de riesgo agregado* pretende resumir en un número el
-estado general de la plataforma, normalmente promediando los scores
-individuales. Es un patrón habitual en paneles comerciales.
+**Qué es.** Un *nivel de riesgo agregado* resume en un número el estado general
+de la plataforma promediando los scores individuales. Es un patrón habitual en
+paneles comerciales, y solo tiene sentido si el score que se promedia varía.
 
-**Qué aporta aquí — y por qué hay que citarlo con cuidado.** Es la media
-aritmética del score de ventana de las alertas cargadas. El problema está
-medido: **el score no es continuo, es prácticamente binario**. Sobre 10.001
-alertas hay solo **10 valores distintos**, y se reparten así:
+**Qué aporta aquí.** Media del riesgo por IP sobre las alertas que **tienen
+dirección de origen**; el 2,0 % restante se **excluye** del promedio en vez de
+contar como cero, porque no hay a quién puntuar y un cero hundiría la media.
 
-| Score | Alertas | % |
-|---|---|---|
-| 2 | 5.412 | 54,1 % |
-| 100 | 4.482 | 44,8 % |
-| resto (8 valores) | 107 | 1,1 % |
+Medido: media **91** sobre **49 valores distintos**. Es alto, y es coherente con
+el resto del panel: de 100 direcciones vistas, 52 superan el umbral de riesgo
+alto. Este laboratorio recibe sobre todo tráfico hostil.
 
-La media de una distribución con dos picos en los extremos es un número que
-**no describe a ninguna alerta**: no hay casi nada cerca de 47. Decir «el
-riesgo medio es 47, nivel guarded» sugiere una plataforma en riesgo moderado,
-cuando lo que hay son dos poblaciones separadas: una casi inofensiva y otra que
-el modelo da por ataque seguro.
-
-Se mantiene en el panel porque es la métrica que enseña el problema de
-saturación descrito en § 5, no porque sirva para decidir. **Para priorizar, usa
-el riesgo por IP** (§ 4), que sí discrimina entre atacantes.
+> **Qué había antes: `AI Risk`, la media del score de ventana.** Ese score no es
+> continuo, es prácticamente binario: **13 valores distintos** sobre 10.001
+> alertas, con el **96,8 % en exactamente 100** y media 99,6. Promediar una
+> distribución así da un número que **no describe a ninguna alerta**.
+>
+> El cambio no es cosmético: sustituye una media saturada por una que sí se
+> mueve. Lo que **no** cambia es la advertencia de § 5 sobre el score de ventana,
+> que sigue existiendo en la ficha de detalle y sigue saturando.
 
 ### 6.2 Gráficas
 
@@ -632,21 +641,35 @@ aproximada consultando a qué bloque de red pertenece.
    un servidor alquilado o comprometido. Sirve para agrupar y para el globo,
    no para atribuir.
 
-#### `AI risk distribution` **[derivado]**
+#### `Reparto de riesgo por IP` **[derivado]**
 
 **Qué es.** Un *histograma* del score: cuántas alertas caen en cada tramo. En un
-modelo bien calibrado se espera una curva repartida, con una cola en los
+modelo bien calibrado se espera una curva repartida, no dos montones en los
 extremos.
 
-**Qué aporta aquí.** Es **la prueba visual de la saturación**. Ocho tramos de
-12,5 puntos; medido, 5.412 alertas en el tramo `0-12,5` y 4.482 en `87,5-100`,
-con los seis tramos intermedios casi vacíos. Un histograma en forma de U es la
-firma de un clasificador que no gradúa: decide sí o no, no «cuánto».
+**Qué aporta aquí.** Ocho tramos de 12,5 puntos sobre el **riesgo por IP**.
+Medido ahora, los ocho tramos tienen población:
 
-Al pulsar un tramo se abre un **detalle emergente** con los scores exactos que
-lo componen y cuántas alertas tiene cada uno. Existe para poder comprobar la
-afirmación anterior sin fiarse del dibujo: al abrir el tramo bajo se ve que las
-5.412 alertas tienen todas exactamente el mismo score, 2.
+| Tramo | Alertas | % |
+|---|---|---|
+| 0–12,5 | 11 | 0,1 % |
+| 12,5–25 | 38 | 0,4 % |
+| 25–37,5 | 91 | 0,9 % |
+| 37,5–50 | 78 | 0,8 % |
+| 50–62,5 | 53 | 0,5 % |
+| 62,5–75 | 350 | 3,6 % |
+| 75–87,5 | 2.010 | 20,5 % |
+| 87,5–100 | 7.168 | **73,2 %** |
+
+La distribución está **cargada hacia arriba** —lo esperable en un laboratorio
+que recibe sobre todo tráfico hostil— pero es una curva, no dos picos. Al pulsar
+un tramo se abre el detalle con los scores exactos que lo componen.
+
+> **Qué había antes.** El mismo histograma sobre el score de **ventana**, y
+> tenía forma de **U**: 5.412 alertas en el primer tramo y 4.482 en el último,
+> con los seis intermedios casi vacíos. Esa forma es la firma de un clasificador
+> que **no gradúa**: decide sí o no, no «cuánto». Era la prueba visual de la
+> saturación, y por eso se cambió la serie en toda la aplicación.
 
 #### `MITRE tactics` **[real]**
 
