@@ -1,0 +1,76 @@
+{
+  "split_mode": "date",
+  "splits": {
+    "train": {
+      "rows": 2399,
+      "window_start_min": "2026-03-09 23:00:00+00:00",
+      "window_start_max": "2026-03-10 06:35:00+00:00",
+      "binary_counts": {
+        "ATTACK": 1553,
+        "BENIGN": 846
+      },
+      "multiclass_counts": {
+        "CredentialAccess": 1463,
+        "ServiceFailure": 904,
+        "OtherAlert": 32
+      },
+      "agents": [
+        "000",
+        "003",
+        "011",
+        "017",
+        "018",
+        "022",
+        "025",
+        "026"
+      ]
+    },
+    "val": {
+      "rows": 530,
+      "window_start_min": "2026-03-10 06:36:00+00:00",
+      "window_start_max": "2026-03-10 08:12:00+00:00",
+      "binary_counts": {
+        "ATTACK": 332,
+        "BENIGN": 198
+      },
+      "multiclass_counts": {
+        "CredentialAccess": 326,
+        "ServiceFailure": 198,
+        "OtherAlert": 6
+      },
+      "agents": [
+        "000",
+        "003",
+        "011",
+        "017",
+        "018",
+        "022",
+        "025",
+        "026"
+      ]
+    },
+    "test": {
+      "rows": 517,
+      "window_start_min": "2026-03-10 08:13:00+00:00",
+      "window_start_max": "2026-03-10 09:50:00+00:00",
+      "binary_counts": {
+        "ATTACK": 318,
+        "BENIGN": 199
+      },
+      "multiclass_counts": {
+        "CredentialAccess": 283,
+        "ServiceFailure": 199,
+        "OtherAlert": 35
+      },
+      "agents": [
+        "000",
+        "011",
+        "018",
+        "022",
+        "023",
+        "025",
+        "026"
+      ]
+    }
+  }
+}

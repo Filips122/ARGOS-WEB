@@ -1,7 +1,10 @@
 import { attacks as mockAttacks, severityColors, type Attack } from '@/lib/mock-data';
 
 function getOriginLabel(attack: Attack) {
-  return [attack.source.city, attack.source.country].filter(Boolean).join(', ') || attack.source.name;
+  const label = [attack.source.city, attack.source.country].filter(Boolean).join(', ') || attack.source.name;
+  // La alerta no traia coordenadas: el punto del globo se asigno por hash de la
+  // IP. Se marca para no presentar una posicion sintetica como geolocalizacion.
+  return attack.geoApproximate ? `${label} (aprox.)` : label;
 }
 
 export function ThreatFeed({
@@ -15,8 +18,6 @@ export function ThreatFeed({
   selectedAttackId?: string;
   onSelectAttack?: (attack: Attack) => void;
 }) {
-  const topTargets = Array.from(new Set(attacks.map((attack) => attack.target.name))).slice(0, 4);
-
   return (
     <aside className="commandPanel feedPanel">
       <div className="feedHeader">
@@ -46,20 +47,80 @@ export function ThreatFeed({
               <span>Rule {attack.wazuhRule}</span>
               <span>{attack.mcpTool}</span>
             </div>
+            {attack.ipRisk && <IpRiskTag risk={attack.ipRisk} ip={attack.source.ip} />}
+            {attack.vulnerability && <VulnerabilityTag vuln={attack.vulnerability} />}
           </button>
         ))}
       </div>
 
-      <div className="miniModule">
-        <p className="eyebrow">TOP TARGETS</p>
-        {topTargets.map((target, index) => (
-          <div className="targetRow" key={target}>
-            <span>0{index + 1}</span>
-            <b>{target}</b>
-            <small>{Math.max(96 - index * 9, 61)} risk</small>
-          </div>
-        ))}
-      </div>
     </aside>
+  );
+}
+
+const KIND_TEXT: Record<NonNullable<Attack['ipRisk']>['evidenceKind'], string> = {
+  enumeracion: 'probó varias cuentas',
+  lateral: 'alcanzó varias máquinas',
+  reputacion: 'su /24 ya produjo hostiles',
+  volumen: 'sin evidencia destacada',
+};
+
+/**
+ * Riesgo de la IP de origen: qué probabilidad da el modelo a que ESTA dirección
+ * merezca bloqueo, según lo que ha hecho. Va junto al AI Score de ventana, que
+ * puntúa el minuto del agente y reparte el mismo número entre todas sus alertas.
+ */
+/**
+ * Marcador de acuerdo con el segundo modelo. Es una anotacion en sombra: el
+ * bloqueo lo decide el HGB, aqui solo se dice si el Transformer opina lo mismo.
+ * En el primer aviso no opina —K=1 esta excluido del paquete— y se declara,
+ * porque callarlo o pintar un 0 seria peor que decir que no hay dato.
+ */
+function secondOpinionLabel(second: NonNullable<Attack['ipRisk']>['secondOpinion']): string {
+  if (!second) return '';
+  if (!second.available) {
+    return second.reason === 'first_notice'
+      ? ' · sin 2ª opinión (1er aviso)'
+      : ' · sin 2ª opinión (fuera de presupuesto)';
+  }
+  return second.agreement === 'both' || second.agreement === 'none'
+    ? ' · 2ª opinión: coincide'
+    : ' · 2ª opinión: discrepa';
+}
+
+function IpRiskTag({ risk, ip }: { risk: NonNullable<Attack['ipRisk']>; ip?: string }) {
+  const level = risk.score >= 0.9 ? 'alto' : risk.score >= 0.6 ? 'medio' : 'bajo';
+  return (
+    <div className={`ipRiskTag ${level}`}>
+      <b>IP {(risk.score * 100).toFixed(0)}</b>
+      <span>{ip ?? ''}</span>
+      <small>
+        {risk.usersTried}c · {risk.agentsReached}m · /24 {(risk.subnetHostileRatio * 100).toFixed(0)}%
+        {risk.blocked ? ` · bloquearía en aviso ${risk.decidedAtAlert}` : ` · ${KIND_TEXT[risk.evidenceKind]}`}
+        {secondOpinionLabel(risk.secondOpinion)}
+      </small>
+    </div>
+  );
+}
+
+/**
+ * Contexto de explotacion real, AL LADO de la severidad de Wazuh y sin
+ * sustituirla. Medido sobre 30 dias: de los 28 CVE que Trivy marca CRITICAL,
+ * ninguno esta en el catalogo KEV de explotacion activa.
+ */
+function VulnerabilityTag({ vuln }: { vuln: NonNullable<Attack['vulnerability']> }) {
+  const level = vuln.inKev ? 'kev' : vuln.actionable ? 'alta' : 'ruido';
+  const label =
+    level === 'kev'
+      ? 'EXPLOTADA EN LA VIDA REAL'
+      : level === 'alta'
+        ? 'EXPLOTACIÓN PROBABLE'
+        : 'SIN EXPLOTACIÓN CONOCIDA';
+
+  return (
+    <div className={`vulnTag ${level}`}>
+      <b>{label}</b>
+      <span>{vuln.cve}</span>
+      <small>{vuln.epss === null ? 'EPSS < 0,02' : `EPSS ${vuln.epss.toFixed(3)}`}</small>
+    </div>
   );
 }

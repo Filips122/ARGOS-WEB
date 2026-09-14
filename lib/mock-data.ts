@@ -1,3 +1,17 @@
+/** Anotacion del Transformer: nunca decide, solo acompana al veredicto. */
+export type SecondOpinionView =
+  | { available: false; reason: 'first_notice' | 'out_of_budget' }
+  | {
+      available: true;
+      score: number;
+      threshold: number;
+      fired: boolean;
+      agreement: 'both' | 'hgb_only' | 'attention_only' | 'none';
+      atAlert: number;
+      decisiveNotices: number[];
+      attentionPerNotice: number[];
+    };
+
 export type Severity = 'low' | 'medium' | 'high' | 'critical';
 export type SensorSource = 'Wazuh' | 'Suricata' | 'Zeek' | 'MCP' | 'AI Engine';
 export type HealthStatus = 'online' | 'offline' | 'learning' | 'planned';
@@ -33,6 +47,80 @@ export type Attack = {
   sensorSources: SensorSource[];
   timestamp: string;
   receivedAt?: string;
+  /** Contexto de explotacion real. Se anade AL LADO de severity, no la sustituye:
+   *  Wazuh sigue diciendo lo que dice y esto informa de si eso se explota. */
+  vulnerability?: {
+    cve: string;
+    inKev: boolean;
+    epss: number | null;
+    actionable: boolean;
+  };
+  /** true cuando las coordenadas de origen son de la lista de reserva, no reales. */
+  geoApproximate?: boolean;
+  /** Riesgo de la IP de origen segun su conducta. Extra, junto al score de ventana. */
+  ipRisk?: {
+    score: number;
+    blocked: boolean;
+    decidedAtAlert: number | null;
+    alertsSeen: number;
+    evidenceKind: 'enumeracion' | 'lateral' | 'reputacion' | 'volumen';
+    usersTried: number;
+    agentsReached: number;
+    subnetHostileRatio: number;
+    /**
+     * Segunda opinion del Transformer de atencion (R13), en modo sombra.
+     * `available: false` con motivo `first_notice` significa que el modelo no
+     * puntua el primer aviso: hay que decirlo, no mostrar 0.
+     */
+    secondOpinion?: SecondOpinionView;
+  };
+  ai?: {
+    modelId: string;
+    modelVersion?: string;
+    score: number;
+    threshold: number;
+    prediction: 'attack' | 'benign';
+    confidence: number;
+    source: 'model' | 'fallback';
+    taxonomy?: {
+      modelId: string;
+      label: string;
+      confidence: number;
+    };
+    csrLanl?: {
+      supervisedScore: number;
+      entityAnomalyScore: number;
+      contextNoveltyScore: number;
+      classification: 'low_signal' | 'suspicious_entity' | 'high_risk_entity';
+      entity: string;
+      windowStart?: string;
+      windowEnd?: string;
+      model: string;
+      auxiliaryModel: string;
+      source: string;
+      warning?: string;
+    };
+  };
+  abuseipdb?: {
+    ip: string;
+    status:
+      | 'checked'
+      | 'cached'
+      | 'below_threshold'
+      | 'private'
+      | 'not_configured'
+      | 'rate_limited'
+      | 'error';
+    seenCount: number;
+    score?: number;
+    totalReports?: number;
+    countryCode?: string;
+    isp?: string;
+    domain?: string;
+    lastReportedAt?: string | null;
+    checkedAt?: string;
+    reason?: string;
+  };
 };
 
 export const severityColors: Record<Severity, string> = {
@@ -198,15 +286,16 @@ export const severityStats = [
   { label: 'Low', value: 22, color: '#38f8d4' },
 ];
 
+/** `ai` es el subconjunto de `alerts` cuya IP tiene riesgo >= 0,9. */
 export const timelineStats = [
-  { label: '00h', alerts: 42, ai: 11 },
-  { label: '03h', alerts: 61, ai: 17 },
-  { label: '06h', alerts: 54, ai: 14 },
-  { label: '09h', alerts: 88, ai: 29 },
-  { label: '12h', alerts: 123, ai: 37 },
-  { label: '15h', alerts: 97, ai: 31 },
-  { label: '18h', alerts: 141, ai: 44 },
-  { label: '21h', alerts: 109, ai: 33 },
+  { label: '00h', alerts: 42, ai: 11, ips: 9 },
+  { label: '03h', alerts: 61, ai: 17, ips: 12 },
+  { label: '06h', alerts: 54, ai: 14, ips: 11 },
+  { label: '09h', alerts: 88, ai: 29, ips: 18 },
+  { label: '12h', alerts: 123, ai: 37, ips: 24 },
+  { label: '15h', alerts: 97, ai: 31, ips: 20 },
+  { label: '18h', alerts: 141, ai: 44, ips: 27 },
+  { label: '21h', alerts: 109, ai: 33, ips: 21 },
 ];
 
 export const topCountries = [

@@ -15,10 +15,14 @@ export function MiniDashboard({
   kpis = mockKpis,
   charts,
   mode = 'demo',
+  loadedAlerts,
 }: {
   kpis?: typeof mockKpis;
   charts?: ArgosLiveData['charts'];
   mode?: 'live' | 'partial' | 'demo';
+  /** Alertas cargadas en el refresco: el reparto de riesgo declara con el
+   *  cuantas quedan fuera por no tener IP de origen. */
+  loadedAlerts?: number;
 }) {
   const attackTypeStats = charts?.attacksByType ?? mockAttackTypeStats;
   const severityStats = charts?.severityDistribution ?? mockSeverityStats;
@@ -27,6 +31,8 @@ export function MiniDashboard({
   const mitreStats = charts?.mitreTactics ?? mockMitreStats;
   const riskDistribution = charts?.riskDistribution;
   const correlationSources = charts?.correlationSources;
+  const criminalIntelligence = charts?.criminalIntelligence;
+  const vulnerabilityIntelligence = charts?.vulnerabilityIntelligence;
 
   return (
     <section className="dashboardDeck">
@@ -45,15 +51,19 @@ export function MiniDashboard({
       <div className="chartGrid primaryCharts">
         <BarChart title="Ataques por tipo" data={attackTypeStats} />
         <DonutChart title="Distribución por severidad" data={severityStats} />
-        <LineChart title="Alertas vs IA por hora" data={timelineStats} />
+        <StackedTimeline title="Volumen por tramo y cuánto viene de IPs peligrosas" data={timelineStats} />
         <HorizontalBars title="Top países origen" data={topCountries} />
       </div>
 
       <div className="chartGrid secondaryCharts">
-        <RiskMatrix data={riskDistribution} />
+        <RiskMatrix data={riskDistribution} loadedAlerts={loadedAlerts} />
         <HorizontalBars title="MITRE tactics" data={mitreStats} />
         <CorrelationSources data={correlationSources} />
       </div>
+
+      <VulnerabilityIntelligence data={vulnerabilityIntelligence} />
+
+      <CriminalIntelligenceDashboard data={criminalIntelligence} />
     </section>
   );
 }
@@ -133,30 +143,125 @@ function DonutChart({ title, data }: { title: string; data: { label: string; val
   );
 }
 
-function LineChart({ title, data }: { title: string; data: { label: string; alerts: number; ai: number }[] }) {
-  const max = Math.max(1, ...data.flatMap((item) => [item.alerts, item.ai]));
-  const pointsAlerts = data.map((item, index) => `${(index / (data.length - 1)) * 100},${100 - (item.alerts / max) * 86}`).join(' ');
-  const pointsAi = data.map((item, index) => `${(index / (data.length - 1)) * 100},${100 - (item.ai / max) * 86}`).join(' ');
+type TimelineBucket = { label: string; alerts: number; ai: number; ips?: number };
+
+/**
+ * Volumen por tramo de 3 h, con la parte que viene de IPs peligrosas.
+ *
+ * Antes eran dos líneas: alertas y alertas con score de ventana >= 70. Ese
+ * umbral lo cruzaba el 100 % de las alertas, así que las dos líneas caían una
+ * encima de otra y la gráfica no decía nada. Además una línea interpola entre
+ * tramos —dibuja una pendiente entre las 12h y las 15h como si hubiera algo en
+ * medio— y con tramos vacíos trazaba caídas suaves a cero que sugerían un
+ * descenso gradual que no ocurrió: simplemente esas alertas ya no están
+ * cargadas.
+ *
+ * Ahora es una columna apilada por tramo. Misma unidad, y una serie es
+ * subconjunto de la otra: eso es parte-de-un-todo, que se apila, no dos barras
+ * al lado. El segmento destacado son las alertas cuya IP tiene riesgo >= 0,9,
+ * que sí varía (medido: del 53 % al 91 %) y separa un pico de volumen de un
+ * pico de peligro.
+ *
+ * Forma «énfasis»: un color para lo que importa, gris para el resto.
+ */
+function StackedTimeline({ title, data }: { title: string; data: TimelineBucket[] }) {
+  const [hover, setHover] = useState<number | null>(null);
+  const max = Math.max(1, ...data.map((item) => item.alerts));
+  const totalAlerts = data.reduce((sum, item) => sum + item.alerts, 0);
+  const totalRisk = data.reduce((sum, item) => sum + item.ai, 0);
+  // El tramo de mayor proporción se resalta entre los demás: comparar ocho
+  // cifras a ojo es justo lo que la etiqueta debería ahorrar.
+  const peak = data.reduce(
+    (best, item, index) =>
+      item.alerts > 0 && item.ai / item.alerts > best.ratio ? { index, ratio: item.ai / item.alerts } : best,
+    { index: -1, ratio: 0 }
+  );
 
   return (
     <article className="chartCard">
       <ChartTitle title={title} />
-      <svg className="lineSvg" viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label={title}>
-        <polyline points={pointsAlerts} className="lineAlerts" />
-        <polyline points={pointsAi} className="lineAi" />
-      </svg>
-      <div className="lineLegend"><span>Total alerts</span><span>AI risk events</span></div>
+      <div className="stackChart" role="img" aria-label={`${title}. ${totalAlerts} alertas, ${totalRisk} de IPs con riesgo alto.`}>
+        {data.map((item, index) => {
+          const share = item.alerts > 0 ? item.ai / item.alerts : 0;
+          const height = (item.alerts / max) * 100;
+          const riskHeight = item.alerts > 0 ? (item.ai / item.alerts) * 100 : 0;
+          return (
+            <div
+              className={`stackCol${hover === index ? ' on' : ''}`}
+              key={item.label}
+              onMouseEnter={() => setHover(index)}
+              onMouseLeave={() => setHover(null)}
+              onFocus={() => setHover(index)}
+              onBlur={() => setHover(null)}
+              tabIndex={0}
+            >
+              <div className="stackPlot">
+                {/* El porcentaje va en todas las columnas con datos. En las
+                    vacias se omite: un "0 %" ahi diria que nada fue peligroso,
+                    cuando lo que pasa es que no hay alertas cargadas. */}
+                {item.alerts > 0 && (
+                  <span
+                    className={`stackPeak${index === peak.index ? ' top' : ''}`}
+                    style={{ bottom: `${height}%` }}
+                  >
+                    {Math.round(share * 100)} %
+                  </span>
+                )}
+                <div className="stackBar" style={{ height: `${height}%` }}>
+                  <i className="stackRest" />
+                  <i className="stackRisk" style={{ height: `${riskHeight}%` }} />
+                </div>
+                {hover === index && (
+                  <div className="stackTip" role="tooltip">
+                    <b>{item.label}</b>
+                    <span>{item.alerts.toLocaleString('es-ES')} alertas</span>
+                    <span>
+                      {item.ai.toLocaleString('es-ES')} de IPs con riesgo alto ({Math.round(share * 100)} %)
+                    </span>
+                    {item.ips !== undefined && <span>{item.ips} IP(s) distintas</span>}
+                  </div>
+                )}
+              </div>
+              <small>{item.label}</small>
+            </div>
+          );
+        })}
+      </div>
+      <div className="stackLegend">
+        <span><i className="swRisk" />De IPs con riesgo ≥ 0,9</span>
+        <span><i className="swRest" />Resto</span>
+      </div>
     </article>
   );
 }
 
-function RiskMatrix({ data }: { data?: ArgosLiveData['charts']['riskDistribution'] }) {
+/**
+ * Reparto del riesgo por IP.
+ *
+ * Solo entran las alertas que TIENEN direccion de origen. Las del escaner de
+ * vulnerabilidades y las del sistema no tienen atacante al que puntuar, asi que
+ * quedan fuera. Esa proporcion oscila mucho entre refrescos segun lo que
+ * domine la ventana cargada: medido, del 2 % al 82 %.
+ *
+ * Por eso la cobertura se declara debajo del reparto. Antes no se decia y la
+ * suma de los tramos no cuadraba con las alertas cargadas: quien lo sumaba
+ * encontraba un agujero sin explicacion.
+ */
+function RiskMatrix({
+  data,
+  loadedAlerts,
+}: {
+  data?: ArgosLiveData['charts']['riskDistribution'];
+  loadedAlerts?: number;
+}) {
   const [selectedRange, setSelectedRange] = useState<ArgosLiveData['charts']['riskDistribution'][number] | null>(null);
   const cells = data?.length ? data : buildFallbackRiskBuckets();
+  const scored = cells.reduce((sum, bucket) => sum + bucket.count, 0);
+  const outside = Math.max(0, (loadedAlerts ?? scored) - scored);
 
   return (
     <article className="chartCard riskCard">
-      <ChartTitle title="AI risk distribution" />
+      <ChartTitle title="Reparto de riesgo por IP" />
       <div className="riskGrid">
         {cells.map((bucket) => (
           <button
@@ -170,6 +275,18 @@ function RiskMatrix({ data }: { data?: ArgosLiveData['charts']['riskDistribution
           </button>
         ))}
       </div>
+      <p className="riskCoverage">
+        Sobre <b>{scored.toLocaleString('es-ES')}</b> alertas con IP de origen.
+        {outside > 0 && (
+          <>
+            {' '}
+            <span>
+              {outside.toLocaleString('es-ES')} sin dirección quedan fuera: el escáner de
+              vulnerabilidades y los eventos del sistema no tienen atacante al que puntuar.
+            </span>
+          </>
+        )}
+      </p>
       {selectedRange && (
         <div className="riskPopover" role="dialog" aria-label={`Detalle AI risk ${selectedRange.label}`}>
           <div className="riskPopoverHeader">
@@ -223,6 +340,197 @@ function CorrelationSources({ data }: { data?: { label: string; value: number }[
     { label: 'All combined', value: 22 },
   ];
   return <HorizontalBars title="Correlación por fuente" data={sources} />;
+}
+
+/**
+ * Explotacion real de vulnerabilidades. No sustituye a la severidad de Wazuh:
+ * la contrasta. Medido sobre 30 dias de este despliegue, el 99,9 % de las
+ * alertas CRITICAL son hallazgos de Trivy y ninguno de sus 28 CVE marcados
+ * CRITICAL figura en el catalogo de explotacion activa de CISA.
+ */
+function VulnerabilityIntelligence({ data }: { data?: ArgosLiveData['charts']['vulnerabilityIntelligence'] }) {
+  if (!data) return null;
+
+  if (!data.available) {
+    return (
+      <section className="vulnDeck" aria-label="Explotacion real de vulnerabilidades">
+        <div className="dashboardHeader vulnHeader">
+          <div>
+            <p className="eyebrow">CISA KEV + EPSS</p>
+            <h2>Explotación real</h2>
+          </div>
+          <p>Catálogos no disponibles: sin conexión para descargar KEV/EPSS. El resto del panel no se ve afectado.</p>
+        </div>
+      </section>
+    );
+  }
+
+  const { contrast } = data;
+  const noise = data.distinctCves - data.actionableCves;
+
+  return (
+    <section className="vulnDeck" aria-label="Explotacion real de vulnerabilidades">
+      <div className="dashboardHeader vulnHeader">
+        <div>
+          <p className="eyebrow">CISA KEV + EPSS</p>
+          <h2>Explotación real</h2>
+        </div>
+        <p>
+          Contraste de la severidad declarada frente a explotación observada.
+          Catálogo KEV {data.kevVersion ?? '—'}. No modifica la severidad de Wazuh.
+        </p>
+      </div>
+
+      <div className="criminalKpiGrid">
+        <KpiCard label="CVE detectados" value={String(data.distinctCves)} trend={`${data.alertsWithCve} alertas`} tone="ai" />
+        <KpiCard label="Explotados (KEV)" value={String(data.exploitedCves)} trend="explotación confirmada" tone="critical" />
+        <KpiCard label="Accionables" value={String(data.actionableCves)} trend="KEV o EPSS ≥ 0,1" tone="high" />
+        <KpiCard
+          label="Ruido de inventario"
+          value={String(noise)}
+          trend={data.noiseReductionFactor ? `cola reducida ×${data.noiseReductionFactor}` : 'sin accionables'}
+          tone="ok"
+        />
+      </div>
+
+      {contrast.criticalAlerts > 0 && (
+        <div className="vulnContrast">
+          <p className="eyebrow">SEVERIDAD DECLARADA FRENTE A EXPLOTACIÓN</p>
+          <div className="vulnContrastRow">
+            <b>{contrast.criticalAlerts}</b>
+            <span>alertas marcadas CRITICAL por el nivel de regla de Wazuh</span>
+          </div>
+          <div className="vulnContrastRow">
+            <b>{contrast.criticalFromVulnScan}</b>
+            <span>de ellas son hallazgos de escáner de vulnerabilidades, no ataques en curso</span>
+          </div>
+          <div className="vulnContrastRow strong">
+            <b>{contrast.criticalActuallyExploited}</b>
+            <span>corresponden a CVE con explotación real conocida</span>
+          </div>
+        </div>
+      )}
+
+      <div className="chartGrid criminalCharts">
+        <HorizontalBars title="Reparto por explotación" data={data.severityVsExploitation} />
+        <TopExploitedCves data={data.topExploited} />
+      </div>
+    </section>
+  );
+}
+
+function TopExploitedCves({ data }: { data: ArgosLiveData['charts']['vulnerabilityIntelligence']['topExploited'] }) {
+  return (
+    <article className="chartCard">
+      <ChartTitle title="Prioridad real de parcheo" />
+      {data.length === 0 ? (
+        <p className="vulnEmpty">Ningún CVE accionable en las alertas cargadas.</p>
+      ) : (
+        <ul className="vulnList">
+          {data.map((item) => (
+            <li key={item.cve}>
+              <code>{item.cve}</code>
+              {item.inKev && <span className="vulnKev">KEV</span>}
+              <small>{item.epss === null ? 'EPSS < 0,02' : `EPSS ${item.epss.toFixed(3)}`}</small>
+              <b>{item.alerts}</b>
+            </li>
+          ))}
+        </ul>
+      )}
+    </article>
+  );
+}
+
+function CriminalIntelligenceDashboard({ data }: { data?: ArgosLiveData['charts']['criminalIntelligence'] }) {
+  const fallback = data ?? {
+    enabled: false,
+    minAlertsPerIp: 10,
+    cacheTtlHours: 24,
+    overview: {
+      publicIps: 0,
+      eligibleIps: 0,
+      checkedIps: 0,
+      cachedIps: 0,
+      highRiskIps: 0,
+      maliciousAlerts: 0,
+      privateAlerts: 0,
+      belowThresholdAlerts: 0,
+      rateLimitedAlerts: 0,
+    },
+    reputationBuckets: [
+      { label: '0-39', value: 0, color: '#38f8d4' },
+      { label: '40-79', value: 0, color: '#ffd166' },
+      { label: '80-100', value: 0, color: '#ff2f5f' },
+      { label: 'Unknown', value: 0, color: '#7ea8b8' },
+    ],
+    topReportedIps: [],
+    statusBreakdown: [],
+  };
+  const statusRows = fallback.statusBreakdown.length
+    ? fallback.statusBreakdown
+    : [{ label: fallback.enabled ? 'Waiting for repeated IPs' : 'API key missing', value: 0 }];
+
+  return (
+    <section className="criminalDeck" aria-label="Criminal Intelligence Dashboard">
+      <div className="dashboardHeader criminalHeader">
+        <div>
+          <p className="eyebrow">ABUSEIPDB ENRICHMENT</p>
+          <h2>Criminal Intelligence Dashboard</h2>
+        </div>
+        <p>
+          IPs publicas consultadas solo cuando se repiten al menos {fallback.minAlertsPerIp} veces.
+          Cache local: {fallback.cacheTtlHours}h.
+        </p>
+      </div>
+
+      <div className="criminalKpiGrid">
+        <KpiCard label="Eligible IPs" value={String(fallback.overview.eligibleIps)} trend="publicas repetidas" tone="ai" />
+        <KpiCard label="Checked IPs" value={String(fallback.overview.checkedIps)} trend={`${fallback.overview.cachedIps} desde cache`} tone="ok" />
+        <KpiCard label="High Risk IPs" value={String(fallback.overview.highRiskIps)} trend="score >= 80" tone="critical" />
+        <KpiCard label="Flagged Alerts" value={String(fallback.overview.maliciousAlerts)} trend="en alertas cargadas" tone="high" />
+      </div>
+
+      <div className="chartGrid criminalCharts">
+        <DonutChart title="AbuseIPDB reputation" data={fallback.reputationBuckets} />
+        <HorizontalBars title="Lookup status" data={statusRows} />
+        <TopReportedIps data={fallback.topReportedIps} enabled={fallback.enabled} rateLimitedUntil={fallback.rateLimitedUntil} />
+      </div>
+    </section>
+  );
+}
+
+function TopReportedIps({
+  data,
+  enabled,
+  rateLimitedUntil,
+}: {
+  data: { label: string; value: number; meta: string }[];
+  enabled: boolean;
+  rateLimitedUntil?: string;
+}) {
+  return (
+    <article className="chartCard criminalIpsCard">
+      <ChartTitle title="Top reported IPs" />
+      <div className="criminalIpList">
+        {data.length > 0 ? data.map((item) => (
+          <div className="criminalIpRow" key={item.label}>
+            <div>
+              <b>{item.label}</b>
+              <span>{item.meta}</span>
+            </div>
+            <strong>{item.value}</strong>
+          </div>
+        )) : (
+          <p>
+            {enabled
+              ? 'Sin IPs publicas repetidas suficientes para consultar.'
+              : 'Configura ABUSEIPDB_API_KEY para activar el enriquecimiento.'}
+          </p>
+        )}
+      </div>
+      {rateLimitedUntil && <small className="rateLimitNotice">Rate limited hasta {new Date(rateLimitedUntil).toLocaleString('es-ES')}</small>}
+    </article>
+  );
 }
 
 function ChartTitle({ title }: { title: string }) {

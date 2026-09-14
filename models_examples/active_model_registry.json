@@ -1,0 +1,86 @@
+{
+  "models": [
+    {
+      "model_id": "hgb_lab_alerts_binary_refactor_date_20260606_194229",
+      "role": "primary_ai_score_detector",
+      "domain": "siem_lab_alerts",
+      "dataset_key": "LAB-ALERTS",
+      "model_type": "hgb_binary_window",
+      "artifact_dir": "models_examples/model_store/hgb_lab_alerts_binary_refactor_date_20260606_194229/20260606_194229",
+      "model_path": "models_examples/model_store/hgb_lab_alerts_binary_refactor_date_20260606_194229/20260606_194229/model.joblib",
+      "threshold": 0.5,
+      "version": "20260606_194229",
+      "status": "active_production_candidate",
+      "pipeline": "binary",
+      "split_mode": "date",
+      "window_size": "1min",
+      "group_key": "agent_id",
+      "feature_count": 16,
+      "schema_hash": "4de76ce201c2e3a14d6705a9526f04ed21bf7356293d06ea99787a24e40b5c1b",
+      "metrics": {
+        "accuracy": 0.988394584139265,
+        "macro_f1": 0.9877904779897978,
+        "macro_recall": 0.9896258019658039,
+        "roc_auc": 0.9931023039726936,
+        "pr_auc": 0.9966697038268066,
+        "ece": 0.01866762258914118
+      },
+      "test_confusion_matrix_order": ["BENIGN", "ATTACK"],
+      "test_confusion_matrix": [
+        [198, 1],
+        [5, 313]
+      ],
+      "notes": [
+        "Active detector for Wazuh alerts in the web app.",
+        "Inference must aggregate raw Wazuh alerts by 1-minute windows and agent_id before prediction.",
+        "The score is a window-level attack probability copied back to each alert in that window."
+      ]
+    },
+    {
+      "model_id": "hgb_lab_alerts_multiclass_refactor_date_20260606_194256",
+      "role": "lab_alert_taxonomy_enrichment",
+      "domain": "siem_lab_alerts",
+      "dataset_key": "LAB-ALERTS",
+      "model_type": "hgb_multiclass_window",
+      "artifact_dir": "models_examples/model_store/hgb_lab_alerts_multiclass_refactor_date_20260606_194256/20260606_194256",
+      "model_path": "models_examples/model_store/hgb_lab_alerts_multiclass_refactor_date_20260606_194256/20260606_194256/model.joblib",
+      "threshold": 0.5,
+      "version": "20260606_194256",
+      "status": "active_taxonomy_candidate",
+      "pipeline": "multiclass",
+      "split_mode": "date",
+      "window_size": "1min",
+      "group_key": "agent_id",
+      "feature_count": 16,
+      "schema_hash": "4de76ce201c2e3a14d6705a9526f04ed21bf7356293d06ea99787a24e40b5c1b",
+      "metrics": {
+        "accuracy": 0.9729206963249516,
+        "macro_f1": 0.9152330045380976,
+        "macro_recall": 0.8833585731112232,
+        "ece": 0.02293721837450253
+      },
+      "test_confusion_matrix_order": ["CredentialAccess", "OtherAlert", "ServiceFailure"],
+      "test_confusion_matrix": [
+        [281, 1, 1],
+        [2, 23, 10],
+        [0, 0, 199]
+      ],
+      "notes": [
+        "Use as taxonomy/classification enrichment after the binary detector.",
+        "OtherAlert recall is weaker than CredentialAccess and ServiceFailure; do not use it as the primary benign/attack decision."
+      ]
+    }
+  ],
+  "legacy_models": [
+    {
+      "model_id": "hgb_lab_alerts_binary_date_20260520_181715",
+      "status": "replaced_by_refactor",
+      "reason": "Old web inference used handcrafted per-alert features instead of the original 1-minute LAB-ALERTS training contract."
+    },
+    {
+      "model_id": "hgb_cowrie_multiclass_date_20260520_182459",
+      "status": "available_legacy_honeypot_taxonomy",
+      "reason": "Keep for future Cowrie-specific enrichment, but it is not the active LAB-ALERTS web detector."
+    }
+  ]
+}

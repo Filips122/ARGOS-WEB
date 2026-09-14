@@ -81,6 +81,25 @@ const alertSourceFields = [
   'data.srcip',
   'data.src_ip',
   'data.sid',
+  // data.username y user.name no existen en esta instalacion (0 documentos en
+  // 7 dias); la cuenta probada viaja en data.srcuser (270k) y data.dstuser
+  // (161k). Sin ellos, unique_src_user_count y unique_dst_user_count quedan
+  // constantes a 0 y el bloqueo temprano se queda sin criterio de enumeracion.
+  'data.srcuser',
+  'data.dstuser',
+  'data.username',
+  'data.command',
+  'data.srcport',
+  'data.dstport',
+  'decoder.name',
+  // paridad de esquema con lib/dataset-export.ts: alimentan
+  // unique_location_count y unique_program_count del extractor.
+  'location',
+  'predecoder.program_name',
+  'user.name',
+  'process.command_line',
+  'source.port',
+  'destination.port',
   'GeoLocation.city_name',
   'GeoLocation.country_name',
   'GeoLocation.country_code2',

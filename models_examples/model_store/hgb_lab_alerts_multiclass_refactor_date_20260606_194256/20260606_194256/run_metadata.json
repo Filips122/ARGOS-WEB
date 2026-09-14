@@ -1,0 +1,31 @@
+{
+  "dataset": "LAB-ALERTS",
+  "model_name": "offline_LAB_ALERTS_multiclass_hgb",
+  "split_mode": "date",
+  "run_id": "20260606_194256",
+  "created_at_utc": "2026-06-06T17:42:56Z",
+  "artifact_root": "C:\\Users\\xfeli\\Desktop\\TFM\\ARGOS-GIT\\ARGOS-WEB\\LAB_ALERTS_REFACTOR\\artifacts\\offline_LAB_ALERTS_multiclass_hgb\\date\\20260606_194256",
+  "dataset_profile": {
+    "status": "ok",
+    "path": "C:\\Users\\xfeli\\Desktop\\TFM\\ARGOS-GIT\\ARGOS-WEB\\LAB_ALERTS_REFACTOR\\prepared_dataset\\date\\LAB-ALERTS\\prepare_dataset_summary.json",
+    "dataset": "LAB-ALERTS",
+    "split_mode": "date",
+    "fold": null,
+    "window_size": "1min",
+    "group_key": "agent_id",
+    "feature_profile": "operational_no_label_proxy",
+    "feature_profile_description": "Operational LAB-ALERTS profile excluding direct weak-label proxy features.",
+    "feature_count": 16,
+    "excluded_feature_count": 27,
+    "feature_profile_path": "C:\\Users\\xfeli\\Desktop\\TFM\\ARGOS-GIT\\ARGOS-WEB\\LAB_ALERTS_REFACTOR\\prepared_dataset\\date\\LAB-ALERTS\\feature_profile.json",
+    "schema_contract_path": "C:\\Users\\xfeli\\Desktop\\TFM\\ARGOS-GIT\\ARGOS-WEB\\LAB_ALERTS_REFACTOR\\prepared_dataset\\date\\LAB-ALERTS\\schema_contract.json",
+    "schema_hash": "4de76ce201c2e3a14d6705a9526f04ed21bf7356293d06ea99787a24e40b5c1b",
+    "extractor_version": "lab_alerts_feature_extractor_v2"
+  },
+  "run_config": {
+    "sample_frac": null,
+    "epochs": 215,
+    "datasets_base": "LAB_ALERTS_REFACTOR\\prepared_dataset"
+  },
+  "sample_frac": null
+}

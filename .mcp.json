@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "argos": {
+      "command": "node",
+      "args": ["deploy/argos_mcp/server.ts"],
+      "env": {
+        "ARGOS_WEB_URL": "http://localhost:3000",
+        "ARGOS_SCORER_URL": "http://127.0.0.1:8973"
+      }
+    }
+  }
+}

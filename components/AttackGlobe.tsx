@@ -76,7 +76,10 @@ function getAttackAgeMs(attack: Attack, now: number) {
 }
 
 function getOriginLabel(attack: Attack) {
-  return [attack.source.city, attack.source.country].filter(Boolean).join(', ') || attack.source.name;
+  const label = [attack.source.city, attack.source.country].filter(Boolean).join(', ') || attack.source.name;
+  // Coordenadas de reserva asignadas por hash de la IP: se marca para no
+  // presentar una posicion sintetica como geolocalizacion real.
+  return attack.geoApproximate ? `${label} (aprox.)` : label;
 }
 
 function getStableUnitInterval(value: string) {
@@ -570,13 +573,14 @@ export function AttackGlobe({
 
         <div className="wazuhAlertRows" role="table">
           <div className="wazuhAlertRow wazuhAlertHead" role="row">
-            <span role="columnheader">Severidad</span>
+            <span role="columnheader">Severity</span>
             <span role="columnheader">Tipo</span>
             <span role="columnheader">Origen</span>
             <span role="columnheader">IP origen</span>
             <span role="columnheader">Destino</span>
             <span role="columnheader">Regla</span>
-            <span role="columnheader">AI</span>
+            <span role="columnheader" title="Riesgo de bloqueo de la IP de origen, 0-100">Riesgo IP</span>
+            <span role="columnheader">Class</span>
           </div>
           {pipelineAlerts.map((attack) => (
             <button
@@ -594,7 +598,27 @@ export function AttackGlobe({
               <span role="cell">{attack.source.ip ?? 'unknown'}</span>
               <span role="cell">{attack.target.name}</span>
               <span role="cell">{attack.wazuhRule}</span>
-              <span role="cell">{attack.score}</span>
+              {/* Riesgo de la IP, no el score de ventana. El de ventana puntua
+                  el minuto del agente y lo reparte igual entre todas sus
+                  alertas: satura y no distingue entre atacantes. Este si.
+                  Vive ahora en la ficha de detalle, no en la tabla.
+                  El 2 % de alertas sin IP de origen (Trivy, syscheck) no tienen
+                  a quien puntuar: se marcan con guion, no con un cero. */}
+              <span
+                role="cell"
+                className={attack.ipRisk ? `ipScoreCell ${attack.ipRisk.score >= 0.9 ? 'alto' : attack.ipRisk.score >= 0.6 ? 'medio' : 'bajo'}` : 'ipScoreCell none'}
+                title={
+                  attack.ipRisk
+                    ? `${attack.ipRisk.usersTried} cuenta(s), ${attack.ipRisk.agentsReached} maquina(s)` +
+                      (attack.ipRisk.blocked ? `, bloquearia en el aviso ${attack.ipRisk.decidedAtAlert}` : '')
+                    : 'Sin IP de origen: no hay direccion a la que puntuar'
+                }
+              >
+                {attack.ipRisk ? Math.round(attack.ipRisk.score * 100) : '—'}
+              </span>
+              <span role="cell" className={`classificationCell ${attack.ai?.prediction ?? 'unknown'}`}>
+                {attack.ai?.prediction ?? 'unknown'}
+              </span>
             </button>
           ))}
         </div>
@@ -629,7 +653,9 @@ function AttackDetailCard({
       <div className="attackDetailMeta">
         <b>{attack.id}</b>
         <span>{attack.timestamp}</span>
-        <span>AI {attack.score}</span>
+        <span title={attack.ai ? `${attack.ai.modelId} - ${attack.ai.prediction}` : undefined}>
+          AI {attack.score}
+        </span>
       </div>
       <dl className="attackDetailGrid">
         <div><dt>Origen</dt><dd>{getOriginLabel(attack)}</dd></div>
@@ -640,11 +666,83 @@ function AttackDetailCard({
         <div><dt>Zona</dt><dd>{attack.zone}</dd></div>
         <div><dt>Tactica</dt><dd>{attack.tactic}</dd></div>
         <div><dt>Wazuh rule</dt><dd>{attack.wazuhRule}</dd></div>
+        {attack.ai && <div><dt>Modelo IA</dt><dd>{attack.ai.modelId}</dd></div>}
+        {attack.ai && <div><dt>Prediccion IA</dt><dd>{attack.ai.prediction} ({Math.round(attack.ai.confidence * 100)}%)</dd></div>}
+        {attack.ai?.taxonomy && <div><dt>Prediccion taxonomica IA</dt><dd>{attack.ai.taxonomy.label} ({Math.round(attack.ai.taxonomy.confidence * 100)}%)</dd></div>}
+        {attack.ai?.csrLanl && <div><dt>CSR-LANL entidad</dt><dd>{attack.ai.csrLanl.entity}</dd></div>}
+        {attack.ai?.csrLanl && <div><dt>CSR-LANL clasificacion</dt><dd>{attack.ai.csrLanl.classification.replaceAll('_', ' ')}</dd></div>}
+        {attack.ai?.csrLanl && <div><dt>CSR-LANL score</dt><dd>{Math.round(attack.ai.csrLanl.supervisedScore * 100)}%</dd></div>}
+        {attack.ai?.csrLanl && <div><dt>Anomalia entidad</dt><dd>{attack.ai.csrLanl.entityAnomalyScore.toFixed(3)}</dd></div>}
+        {attack.ai?.csrLanl && <div><dt>Novedad contexto</dt><dd>{Math.round(attack.ai.csrLanl.contextNoveltyScore * 100)}%</dd></div>}
         <div><dt>Suricata SID</dt><dd>{attack.suricataSid}</dd></div>
         <div><dt>MCP tool</dt><dd>{attack.mcpTool}</dd></div>
         <div><dt>Sensores</dt><dd>{attack.sensorSources.join(' / ')}</dd></div>
       </dl>
+      {attack.ipRisk?.secondOpinion && <SecondOpinionBlock second={attack.ipRisk.secondOpinion} />}
     </article>
+  );
+}
+
+/**
+ * Segunda opinion del Transformer de atencion sobre la misma pregunta que
+ * responde `IP <n>`: si esa direccion merece bloqueo. NO decide: el veredicto
+ * es siempre del HGB, que es el unico modelo con validacion externa.
+ *
+ * Lo que aporta y el HGB no puede dar es la ultima fila: que avisos pesaron.
+ */
+function SecondOpinionBlock({ second }: { second: NonNullable<Attack['ipRisk']>['secondOpinion'] }) {
+  if (!second) return null;
+
+  if (!second.available) {
+    return (
+      <div className="secondOpinion">
+        <header>
+          <span>SEGUNDA OPINIÓN</span>
+          <b>Transformer de atención</b>
+        </header>
+        <p className="secondOpinionEmpty">
+          {second.reason === 'first_notice'
+            ? 'Sin segunda opinión hasta el 2º aviso: el modelo no puntúa el primero.'
+            : 'Sin segunda opinión: el número de avisos no es uno de sus presupuestos (2, 3, 5, 10, 20).'}
+        </p>
+      </div>
+    );
+  }
+
+  const agrees = second.agreement === 'both' || second.agreement === 'none';
+  const total = second.attentionPerNotice.reduce((sum, value) => sum + value, 0) || 1;
+
+  return (
+    <div className="secondOpinion">
+      <header>
+        <span>SEGUNDA OPINIÓN</span>
+        <b>Transformer de atención</b>
+        <em className={agrees ? 'ok' : 'diff'}>{agrees ? 'coincide' : 'discrepa'}</em>
+      </header>
+      <dl className="attackDetailGrid">
+        <div><dt>Score</dt><dd>{Math.round(second.score * 100)}%</dd></div>
+        <div><dt>Umbral (K={second.atAlert})</dt><dd>{Math.round(second.threshold * 100)}%</dd></div>
+        <div><dt>Cruza umbral</dt><dd>{second.fired ? 'sí' : 'no'}</dd></div>
+      </dl>
+      {second.decisiveNotices.length > 0 && (
+        <ul className="secondOpinionNotices">
+          {second.decisiveNotices.map((notice) => (
+            <li key={notice}>
+              <span>aviso {notice}</span>
+              <div className="secondOpinionBar">
+                <i style={{ width: `${Math.round(((second.attentionPerNotice[notice - 1] ?? 0) / total) * 100)}%` }} />
+              </div>
+              <b>{Math.round((second.attentionPerNotice[notice - 1] ?? 0) * 100)}%</b>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="secondOpinionNote">
+        Test interno, sin validación externa. Empata con el modelo principal: no detecta mejor,
+        aporta otro sesgo inductivo y dice qué avisos pesaron. El bloqueo lo decide el modelo
+        principal.
+      </p>
+    </div>
   );
 }
 

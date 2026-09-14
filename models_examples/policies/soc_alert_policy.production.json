@@ -1,0 +1,74 @@
+{
+  "policy_id": "soc_alert_policy_production_baseline_20260602",
+  "status": "production_baseline_policy",
+  "created_at_utc": "2026-06-02T14:05:00Z",
+  "purpose": "Control alert fatigue for production ML pipeline outputs before SIEM incident creation.",
+  "severity_thresholds": {
+    "low": 30,
+    "medium": 50,
+    "high": 70,
+    "critical": 90
+  },
+  "deduplication": {
+    "window_minutes": 15,
+    "key_fields": [
+      "ml.model_id",
+      "event.dataset",
+      "entity.id",
+      "ml.prediction"
+    ],
+    "keep_highest_risk_score": true
+  },
+  "rate_limits": {
+    "default_max_alerts_per_entity_per_hour": 5,
+    "default_max_alerts_per_model_per_hour": 500,
+    "domain_overrides": {
+      "network_temporal": {
+        "max_alerts_per_entity_per_hour": 3,
+        "mode": "enrichment_unless_correlated",
+        "reason": "UGR16 baseline has high alert_rate and should not generate standalone incidents without context."
+      },
+      "siem_lab_alerts": {
+        "max_alerts_per_entity_per_hour": 5,
+        "mode": "alert_with_deduplication",
+        "reason": "LAB baseline has strong F1 but high alert_rate due dataset composition."
+      },
+      "entity_day_triage": {
+        "daily_budget_per_day": 25,
+        "mode": "ranked_triage",
+        "reason": "CSR-LANL is an entity-day ranking model, not a row-level classifier."
+      }
+    }
+  },
+  "incident_promotion": {
+    "standalone_incident_min_risk_score": 90,
+    "require_production_candidate_status": true,
+    "correlation_window_minutes": 30,
+    "promote_medium_risk_when_correlated_with": [
+      "ids_high_severity_alert",
+      "authentication_anomaly",
+      "asset_criticality_high",
+      "repeated_entity_alerts"
+    ]
+  },
+  "automated_response": {
+    "enabled_by_default": false,
+    "allowed_actions": [
+      "tag_entity_for_review",
+      "temporary_watchlist",
+      "notify_analyst"
+    ],
+    "blocked_actions_without_manual_approval": [
+      "block_ip",
+      "disable_account",
+      "isolate_host"
+    ]
+  },
+  "allowlist_policy": {
+    "enabled": true,
+    "review_interval_days": 30,
+    "requires_reason": true,
+    "expires_by_default": true
+  },
+  "active_baseline_summary": "src/models/PRODUCTION_PIPELINE/production_baseline_summary.md"
+}

@@ -10,8 +10,11 @@ import {
   topCountries as mockTopCountries,
   type AgentHealthItem,
   type Attack,
+  type SecondOpinionView,
   type Severity,
 } from '@/lib/mock-data';
+import type { CriminalIntelligenceStats } from '@/lib/abuseipdb';
+import { extractCve, lookupCve, type VulnerabilityContext } from '@/lib/kev-epss';
 
 type WazuhHit = {
   _id?: string;
@@ -102,6 +105,8 @@ export type ArgosLiveData = {
     mitreTactics: typeof mockMitreStats;
     riskDistribution: RiskBucket[];
     correlationSources: { label: string; value: number }[];
+    criminalIntelligence?: CriminalIntelligenceStats;
+    vulnerabilityIntelligence: VulnerabilityIntelligence;
   };
   errors: {
     manager: string | null;
@@ -109,6 +114,79 @@ export type ArgosLiveData = {
     alerts: string | null;
   };
 };
+
+export type VulnerabilityIntelligence = {
+  /** false cuando no se pudo cargar el indice KEV/EPSS (sin red, por ejemplo). */
+  available: boolean;
+  kevVersion: string | null;
+  alertsWithCve: number;
+  distinctCves: number;
+  exploitedCves: number;
+  actionableCves: number;
+  alertsOnExploited: number;
+  noiseReductionFactor: number;
+  /** El contraste que da sentido al panel: cuantas CRITICAL son inventario. */
+  contrast: {
+    criticalAlerts: number;
+    criticalFromVulnScan: number;
+    criticalActuallyExploited: number;
+  };
+  topExploited: { cve: string; epss: number | null; inKev: boolean; alerts: number }[];
+  severityVsExploitation: { label: string; value: number }[];
+};
+
+function buildVulnerabilityIntelligence(
+  attacks: Attack[],
+  kevVersion: string | null,
+  available: boolean
+): VulnerabilityIntelligence {
+  const perCve = new Map<string, { alerts: number; inKev: boolean; epss: number | null; actionable: boolean }>();
+  let alertsWithCve = 0;
+  let criticalAlerts = 0;
+  let criticalFromVulnScan = 0;
+  let criticalActuallyExploited = 0;
+
+  for (const attack of attacks) {
+    const vuln = attack.vulnerability;
+    if (attack.severity === 'critical') criticalAlerts += 1;
+    if (!vuln) continue;
+
+    alertsWithCve += 1;
+    if (attack.severity === 'critical') {
+      criticalFromVulnScan += 1;
+      if (vuln.actionable) criticalActuallyExploited += 1;
+    }
+
+    const entry = perCve.get(vuln.cve);
+    if (entry) entry.alerts += 1;
+    else perCve.set(vuln.cve, { alerts: 1, inKev: vuln.inKev, epss: vuln.epss, actionable: vuln.actionable });
+  }
+
+  const rows = [...perCve.entries()];
+  const exploited = rows.filter(([, v]) => v.inKev);
+  const actionable = rows.filter(([, v]) => v.actionable);
+
+  return {
+    available,
+    kevVersion,
+    alertsWithCve,
+    distinctCves: rows.length,
+    exploitedCves: exploited.length,
+    actionableCves: actionable.length,
+    alertsOnExploited: exploited.reduce((sum, [, v]) => sum + v.alerts, 0),
+    noiseReductionFactor: actionable.length > 0 ? Math.round(rows.length / actionable.length) : 0,
+    contrast: { criticalAlerts, criticalFromVulnScan, criticalActuallyExploited },
+    topExploited: actionable
+      .sort((a, b) => (b[1].epss ?? 0) - (a[1].epss ?? 0))
+      .slice(0, 6)
+      .map(([cve, v]) => ({ cve, epss: v.epss, inKev: v.inKev, alerts: v.alerts })),
+    severityVsExploitation: [
+      { label: 'Explotados (KEV)', value: exploited.length },
+      { label: 'Probables (EPSS>=0,1)', value: actionable.length - exploited.length },
+      { label: 'Sin explotacion conocida', value: rows.length - actionable.length },
+    ],
+  };
+}
 
 export function mapWazuhLevelToSeverity(level?: number): Severity {
   if (level === undefined || Number.isNaN(level)) return 'low';
@@ -171,6 +249,38 @@ function readNumber(value: unknown): number | undefined {
   return Number.isFinite(numeric) ? numeric : undefined;
 }
 
+/**
+ * Traduce la anotacion del sidecar a la forma que consume la interfaz.
+ *
+ * Se conserva el caso "no disponible" con su motivo en vez de devolver
+ * undefined: el primer aviso no tiene segunda opinion por diseno del paquete
+ * (K=1 excluido), y la pantalla debe decirlo, no mostrar un cero ni callarlo.
+ */
+function normalizeSecondOpinion(raw: unknown): SecondOpinionView | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const value = raw as Record<string, unknown>;
+  if (value.available !== true) {
+    const reason = value.reason === 'out_of_budget' ? 'out_of_budget' : 'first_notice';
+    return { available: false, reason };
+  }
+  const agreements = ['both', 'hgb_only', 'attention_only', 'none'] as const;
+  const agreement = agreements.find((item) => item === value.agreement) ?? 'none';
+  return {
+    available: true,
+    score: readNumber(value.score) ?? 0,
+    threshold: readNumber(value.threshold) ?? 0,
+    fired: Boolean(value.fired),
+    agreement,
+    atAlert: readNumber(value.at_alert) ?? 0,
+    decisiveNotices: Array.isArray(value.avisos_decisivos)
+      ? value.avisos_decisivos.map((item) => readNumber(item) ?? 0)
+      : [],
+    attentionPerNotice: Array.isArray(value.atencion_por_aviso)
+      ? value.atencion_por_aviso.map((item) => readNumber(item) ?? 0)
+      : [],
+  };
+}
+
 function readGeoLocation(value: unknown): { lat: number; lon: number } | undefined {
   if (Array.isArray(value)) {
     const [lon, lat] = value;
@@ -196,6 +306,7 @@ function readGeoLocation(value: unknown): { lat: number; lon: number } | undefin
   return undefined;
 }
 
+/** Devuelve tambien si las coordenadas son reales o de la lista de reserva. */
 function getSourceGeo(source: Record<string, any>, fallback: (typeof fallbackGeo)[number]): SourceGeo {
   const geoLocation = source.GeoLocation ?? source.geoip ?? source.source?.geo ?? source.client?.geo ?? source.data?.geoip;
   const coordinates = readGeoLocation(geoLocation?.location);
@@ -240,7 +351,11 @@ function normalizeAgents(agents: unknown): Record<string, any>[] {
   return ((agents as WazuhAgentsResponse | null)?.data?.affected_items ?? []) as Record<string, any>[];
 }
 
-export function normalizeWazuhAlerts(alerts: unknown, agents: unknown): Attack[] {
+export function normalizeWazuhAlerts(
+  alerts: unknown,
+  agents: unknown,
+  vulnIndex: Parameters<typeof lookupCve>[0] = null
+): Attack[] {
   const hits = getAlertHits(alerts);
   const agentItems = normalizeAgents(agents);
 
@@ -248,8 +363,16 @@ export function normalizeWazuhAlerts(alerts: unknown, agents: unknown): Attack[]
     const source = hit._source ?? {};
     const level = readNumber(source.rule?.level);
     const severity = mapWazuhLevelToSeverity(level);
+    const ai = source.ml?.argos;
+    const aiRiskScore = readNumber(ai?.risk_score);
+    const isLocalSimulation = source.argos?.localSimulation === true || source.labels?.argos_local_simulation === 'true';
+    const simulationKind = pickString(source.argos?.simulationKind, source.labels?.argos_simulation_kind);
+    const simulationScenario = pickString(source.argos?.scenario, source.labels?.argos_simulation_scenario);
     const description = pickString(source.rule?.description, source.title, source.full_log) ?? 'Wazuh alert';
-    const attackType = inferAttackType(description);
+    const simulationLabel = simulationKind === 'benign' ? 'benigna' : simulationKind ?? 'local';
+    const attackType = isLocalSimulation
+      ? `Simulacion ${simulationLabel}${simulationScenario ? ` - ${simulationScenario}` : ''}`
+      : inferAttackType(description);
     const sourceIp = pickString(
       source.data?.srcip,
       source.data?.src_ip,
@@ -276,17 +399,70 @@ export function normalizeWazuhAlerts(alerts: unknown, agents: unknown): Attack[]
         name: agentName,
         ip: pickString(source.agent?.ip, source.host?.ip),
       },
+      // El globo dibuja igual las coordenadas reales y las de reserva; sin esta
+      // marca no habia forma de distinguir un origen geolocalizado de uno
+      // colocado por hash de la IP.
+      geoApproximate: !readGeoLocation(
+        (source.GeoLocation ?? source.geoip ?? source.source?.geo ?? source.client?.geo ?? source.data?.geoip)?.location
+      ),
       type: attackType,
       tactic: inferMitreTactic(source, attackType),
       severity,
-      score: estimateAiScoreFromWazuhLevel(level),
+      score: aiRiskScore ?? estimateAiScoreFromWazuhLevel(level),
       agent: agentName,
       wazuhRule: pickString(source.rule?.id) ?? 'N/A',
       suricataSid: pickString(source.rule?.sid, source.data?.sid) ?? 'N/A',
-      mcpTool: attackType.toLowerCase().includes('auth') || attackType.toLowerCase().includes('brute') ? 'auth.window' : 'wazuh.triage',
+      mcpTool: isLocalSimulation ? 'argos.local-simulator' : attackType.toLowerCase().includes('auth') || attackType.toLowerCase().includes('brute') ? 'auth.window' : 'wazuh.triage',
       sensorSources: ['Wazuh', 'AI Engine'],
       timestamp: formatRelativeTimestamp(timestamp),
       receivedAt: timestamp,
+      vulnerability: lookupCve(vulnIndex, extractCve(description)) ?? undefined,
+      ipRisk: source.ml?.ip_risk && typeof source.ml.ip_risk === 'object' ? {
+        score: readNumber(source.ml.ip_risk.score) ?? 0,
+        blocked: Boolean(source.ml.ip_risk.blocked),
+        decidedAtAlert: readNumber(source.ml.ip_risk.decided_at_alert) ?? null,
+        alertsSeen: readNumber(source.ml.ip_risk.alerts_seen) ?? 0,
+        evidenceKind: source.ml.ip_risk.evidence_kind ?? 'volumen',
+        usersTried: readNumber(source.ml.ip_risk.evidence?.usuarios_probados) ?? 0,
+        agentsReached: readNumber(source.ml.ip_risk.evidence?.maquinas_alcanzadas) ?? 0,
+        subnetHostileRatio: readNumber(source.ml.ip_risk.evidence?.reputacion_subred_24) ?? 0,
+        // Segunda opinion del Transformer. Anotacion: no cambia `blocked` ni
+        // `decidedAtAlert`, que siguen siendo los del HGB. Cuando no esta
+        // disponible se conserva el motivo para poder decirlo en pantalla en
+        // vez de mostrar un 0 o callarlo.
+        secondOpinion: normalizeSecondOpinion(source.ml.ip_risk.second_opinion),
+      } : undefined,
+      ai: ai && typeof ai === 'object' ? {
+        modelId: pickString(ai.model_id) ?? 'argos-ai',
+        modelVersion: pickString(ai.model_version),
+        score: readNumber(ai.score) ?? ((aiRiskScore ?? estimateAiScoreFromWazuhLevel(level)) / 100),
+        threshold: readNumber(ai.threshold) ?? 0,
+        prediction: pickString(ai.prediction) === 'benign' ? 'benign' : 'attack',
+        confidence: readNumber(ai.confidence) ?? 0,
+        source: pickString(ai.source) === 'fallback' ? 'fallback' : 'model',
+        taxonomy: ai.taxonomy && typeof ai.taxonomy === 'object' ? {
+          modelId: pickString(ai.taxonomy.model_id) ?? 'cowrie-taxonomy',
+          label: pickString(ai.taxonomy.label) ?? 'unknown',
+          confidence: readNumber(ai.taxonomy.confidence) ?? 0,
+        } : undefined,
+        csrLanl: ai.csr_lanl && typeof ai.csr_lanl === 'object' ? {
+          supervisedScore: readNumber(ai.csr_lanl.supervised_score) ?? 0,
+          entityAnomalyScore: readNumber(ai.csr_lanl.entity_anomaly_score) ?? 0,
+          contextNoveltyScore: readNumber(ai.csr_lanl.context_novelty_score) ?? 0,
+          classification: pickString(ai.csr_lanl.classification) === 'high_risk_entity'
+            ? 'high_risk_entity'
+            : pickString(ai.csr_lanl.classification) === 'suspicious_entity'
+              ? 'suspicious_entity'
+              : 'low_signal',
+          entity: pickString(ai.csr_lanl.entity) ?? 'unknown',
+          windowStart: pickString(ai.csr_lanl.window_start),
+          windowEnd: pickString(ai.csr_lanl.window_end),
+          model: pickString(ai.csr_lanl.model) ?? 'csr_lanl_identity_hgb',
+          auxiliaryModel: pickString(ai.csr_lanl.auxiliary_model) ?? 'csr_lanl_identity_isoforest',
+          source: pickString(ai.csr_lanl.source) ?? 'wazuh_sparse_adapter',
+          warning: pickString(ai.csr_lanl.warning),
+        } : undefined,
+      } : undefined,
     };
   });
 }
@@ -340,18 +516,50 @@ function buildEmptyTimeline() {
     label,
     alerts: 0,
     ai: 0,
+    ips: 0,
   }));
 }
 
+/**
+ * Reparte las alertas por su HORA REAL, en tramos de tres horas.
+ *
+ * Antes agrupaba por la posicion en la lista (`index % 8`), lo que producia
+ * ocho barras casi identicas que no tenian nada que ver con la hora: era una
+ * grafica con forma de distribucion horaria que no lo era.
+ */
 function buildTimeline(attacks: Attack[]) {
   if (attacks.length === 0) return mockTimelineStats;
-  const labels = ['00h', '03h', '06h', '09h', '12h', '15h', '18h', '21h'];
-  return labels.map((label, index) => {
-    const slice = attacks.filter((_, attackIndex) => attackIndex % labels.length === index);
-    const alerts = slice.length;
-    const ai = slice.filter((attack) => attack.score >= 70).length;
-    return { label, alerts, ai };
-  });
+
+  const buckets = Array.from({ length: 8 }, (_, index) => ({
+    label: `${String(index * 3).padStart(2, '0')}h`,
+    alerts: 0,
+    ai: 0,
+    ips: 0,
+  }));
+  const ipsPorTramo = Array.from({ length: 8 }, () => new Set<string>());
+
+  let placed = 0;
+  for (const attack of attacks) {
+    const moment = attack.receivedAt ? new Date(attack.receivedAt) : null;
+    if (!moment || Number.isNaN(moment.getTime())) continue;
+    const index = Math.floor(moment.getHours() / 3);
+    const bucket = buckets[index];
+    bucket.alerts += 1;
+    // `ai` conserva el nombre por compatibilidad con el tipo, pero ya NO cuenta
+    // el score de ventana: contaba las alertas con score >= 70 y eso era el
+    // 100 % de ellas, asi que las dos series salian identicas y la grafica no
+    // decia nada. Ahora cuenta las alertas cuya IP tiene riesgo >= 0,9, que si
+    // varia entre tramos (medido: del 53 % al 91 %) y separa un pico de volumen
+    // de un pico de peligro.
+    if ((attack.ipRisk?.score ?? 0) >= 0.9) bucket.ai += 1;
+    if (attack.source.ip) ipsPorTramo[index].add(attack.source.ip);
+    placed += 1;
+  }
+
+  for (const [index, bucket] of buckets.entries()) bucket.ips = ipsPorTramo[index].size;
+
+  // Sin marcas de tiempo utilizables no hay distribucion horaria que enseñar.
+  return placed === 0 ? buildEmptyTimeline() : buckets;
 }
 
 function buildKpis(
@@ -365,18 +573,55 @@ function buildKpis(
   const critical = attacks.filter((attack) => attack.severity === 'critical').length;
   const activeAgents = agents.filter((agent) => agent.status === 'active').length;
   const disconnectedAgents = agents.filter((agent) => agent.status !== 'active').length;
-  const meanScore = attacks.length
-    ? Math.round(attacks.reduce((sum, attack) => sum + attack.score, 0) / attacks.length)
-    : 0;
+  const { mean: meanScore } = meanIpScore(attacks);
+  // Por DIRECCION, no por alerta: hay unas decenas de IPs generando miles de
+  // alertas, asi que contar alertas aqui daria un numero enorme bajo una
+  // etiqueta que dice "IPs". Seria la misma clase de metrica enganyosa que el
+  // panel ha ido retirando.
+  const ips = new Map<string, number>();
+  for (const attack of attacks) {
+    const score = ipScore(attack);
+    if (attack.source.ip && score !== null) ips.set(attack.source.ip, score);
+  }
+  const highRisk = [...ips.values()].filter((score) => score >= 90).length;
 
   return [
     { label: 'Eventos 24h', value: totalEvents24h.toLocaleString('es-ES'), trend: 'Wazuh', tone: 'info' },
     { label: 'Alertas correladas', value: totalAlerts30d.toLocaleString('es-ES'), trend: `${loadedAlerts30d.toLocaleString('es-ES')} cargadas`, tone: 'info' },
-    { label: 'Anomalias IA', value: attacks.filter((attack) => attack.score >= 70).length.toString(), trend: `media ${meanScore}`, tone: 'ai' },
+    // Contaba alertas con score de ventana >= 70, que lo cruzaba el 100 % de
+    // ellas: el KPI no filtraba nada. Ahora cuenta las de IPs con riesgo >= 90.
+    { label: 'IPs de riesgo alto', value: highRisk.toLocaleString('es-ES'), trend: `de ${ips.size.toLocaleString('es-ES')} direcciones`, tone: 'ai' },
     { label: 'Criticas', value: critical.toString(), trend: critical > 0 ? 'prioridad' : 'estable', tone: 'critical' },
     { label: 'Agentes activos', value: activeAgents.toString(), trend: `${disconnectedAgents} off`, tone: activeAgents > 0 ? 'ok' : 'high' },
-    { label: 'AI Risk', value: meanScore.toString(), trend: meanScore >= 80 ? 'high' : 'guarded', tone: meanScore >= 80 ? 'high' : 'info' },
+    { label: 'Riesgo IP medio', value: meanScore.toString(), trend: meanScore >= 80 ? 'high' : 'guarded', tone: meanScore >= 80 ? 'high' : 'info' },
   ];
+}
+
+/**
+ * Puntuacion por alerta que se usa en KPIs, medias y reparto de riesgo: la del
+ * RIESGO DE LA IP, no la del modelo de ventana.
+ *
+ * El de ventana puntua un minuto de un agente y reparte el mismo numero entre
+ * todas las alertas de dentro; medido, satura: 13 valores distintos sobre
+ * 10.001 alertas, el 96,8 % exactamente 100, media 99,6. Promediarlo daba un
+ * numero que no describia a ninguna alerta.
+ *
+ * El de IP puntua la conducta de la direccion: 49 valores distintos y media
+ * 91,4 sobre la misma muestra. Solo existe donde hay IP de origen (medido:
+ * 98,0 % de las alertas); el resto se EXCLUYE del promedio en vez de contar
+ * como cero, que hundiria la media con alertas que no tienen a quien puntuar.
+ */
+function ipScore(attack: Attack): number | null {
+  return attack.ipRisk ? Math.round(attack.ipRisk.score * 100) : null;
+}
+
+function meanIpScore(attacks: Attack[]): { mean: number; scored: number } {
+  const scores = attacks.map(ipScore).filter((value): value is number => value !== null);
+  if (scores.length === 0) return { mean: 0, scored: 0 };
+  return {
+    mean: Math.round(scores.reduce((sum, value) => sum + value, 0) / scores.length),
+    scored: scores.length,
+  };
 }
 
 function getRiskTone(max: number): RiskBucket['tone'] {
@@ -394,13 +639,19 @@ function buildRiskDistribution(attacks: Attack[]): RiskBucket[] {
   });
 
   return ranges.map(({ min, max }, index) => {
+    // Reparto del riesgo de IP. Con el score de ventana este histograma tenia
+    // forma de U (todo en el primer y el ultimo tramo) porque el modelo decide
+    // si o no, no "cuanto".
     const inRange = attacks.filter((attack) => {
+      const score = ipScore(attack);
+      if (score === null) return false;
       const isLastRange = index === ranges.length - 1;
-      return attack.score >= min && (isLastRange ? attack.score <= max : attack.score < max);
+      return score >= min && (isLastRange ? score <= max : score < max);
     });
     const scoreCounts = Array.from(
       inRange.reduce((counts, attack) => {
-        counts.set(attack.score, (counts.get(attack.score) ?? 0) + 1);
+        const score = ipScore(attack) as number;
+        counts.set(score, (counts.get(score) ?? 0) + 1);
         return counts;
       }, new Map<number, number>()),
       ([score, count]) => ({ score, count })
@@ -445,11 +696,14 @@ function buildLiveAgentHealth(
 ): AgentHealthItem[] {
   const activeAgents = agents.filter((agent) => agent.status === 'active').length;
   const disconnectedAgents = agents.filter((agent) => agent.status !== 'active').length;
-  const geoLocatedAttacks = attacks.filter((attack) => Number.isFinite(attack.source.lat) && Number.isFinite(attack.source.lon)).length;
+  // Solo las que traen coordenadas de verdad. Las de reserva tambien tienen
+  // lat/lon finitas, asi que contarlas inflaba esta cifra al total.
+  const geoLocatedAttacks = attacks.filter(
+    (attack) => !attack.geoApproximate && Number.isFinite(attack.source.lat) && Number.isFinite(attack.source.lon)
+  ).length;
+  const approximateGeo = attacks.filter((attack) => attack.geoApproximate).length;
   const flowsPerMinute = Math.round(totalEvents24h / (24 * 60));
-  const meanScore = attacks.length
-    ? Math.round(attacks.reduce((sum, attack) => sum + attack.score, 0) / attacks.length)
-    : 0;
+  const { mean: meanScore } = meanIpScore(attacks);
 
   return [
     {
@@ -470,17 +724,14 @@ function buildLiveAgentHealth(
     {
       name: 'GeoIP Enrichment',
       status: geoLocatedAttacks > 0 ? 'online' : 'learning',
-      metric: `${geoLocatedAttacks.toLocaleString('es-ES')} origenes geolocalizados`,
+      metric: approximateGeo > 0
+        ? `${geoLocatedAttacks.toLocaleString('es-ES')} reales · ${approximateGeo.toLocaleString('es-ES')} aprox.`
+        : `${geoLocatedAttacks.toLocaleString('es-ES')} origenes geolocalizados`,
     },
     {
       name: 'Risk Scoring',
       status: attacks.length > 0 ? 'online' : 'learning',
-      metric: `score medio ${meanScore}`,
-    },
-    {
-      name: 'MCP Agents',
-      status: 'planned',
-      metric: 'pendiente de integracion',
+      metric: attacks.some((attack) => attack.ai?.source === 'model') ? `modelo IA activo - media ${meanScore}` : `score medio ${meanScore}`,
     },
     {
       name: 'Flow Average',
@@ -496,9 +747,11 @@ export function buildArgosLiveData(input: {
   alerts: unknown;
   events24h?: unknown;
   errors: ArgosLiveData['errors'];
+  vulnIndex?: Parameters<typeof lookupCve>[0];
+  kevVersion?: string | null;
 }): ArgosLiveData {
   const agentItems = normalizeAgents(input.agents);
-  const normalizedAttacks = normalizeWazuhAlerts(input.alerts, input.agents);
+  const normalizedAttacks = normalizeWazuhAlerts(input.alerts, input.agents, input.vulnIndex ?? null);
   const hasLiveContext = Boolean(input.manager || input.agents || input.events24h);
   const shouldUseMock = normalizedAttacks.length === 0 && (Boolean(input.errors.alerts) || !hasLiveContext);
   const attacks = normalizedAttacks.length > 0 ? normalizedAttacks : shouldUseMock ? mockAttacks : [];
@@ -538,11 +791,26 @@ export function buildArgosLiveData(input: {
       topCountries: hasLiveContext && attacks.length === 0 ? [] : toChartRows(countBy(attacks.map((attack) => attack.source.country)), mockTopCountries, 5),
       mitreTactics: hasLiveContext && attacks.length === 0 ? [] : toChartRows(countBy(attacks.map((attack) => attack.tactic)), mockMitreStats, 6),
       riskDistribution: buildRiskDistribution(attacks),
+      vulnerabilityIntelligence: buildVulnerabilityIntelligence(
+        attacks,
+        input.kevVersion ?? null,
+        Boolean(input.vulnIndex)
+      ),
+      // Enriquecimientos que de verdad se aplican. Antes listaba Suricata y
+      // Zeek, que no estan integrados, asi que esas dos filas valian siempre 0.
       correlationSources: [
-        { label: 'Wazuh + IA', value: attacks.filter((attack) => attack.sensorSources.includes('Wazuh')).length },
-        { label: 'Suricata + IA', value: attacks.filter((attack) => attack.sensorSources.includes('Suricata')).length },
-        { label: 'Zeek + IA', value: attacks.filter((attack) => attack.sensorSources.includes('Zeek')).length },
-        { label: 'All combined', value: attacks.filter((attack) => attack.sensorSources.length >= 4).length },
+        { label: 'Modelo de ventana', value: attacks.filter((attack) => attack.ai?.source === 'model').length },
+        { label: 'Riesgo por IP', value: attacks.filter((attack) => attack.ipRisk).length },
+        // 'cached' cuenta igual que 'checked': la alerta lleva reputacion real,
+        // solo que servida desde el disco. Contar solo 'checked' hacia que la
+        // fila marcase 0 con 4.447 alertas efectivamente enriquecidas.
+        {
+          label: 'Reputacion AbuseIPDB',
+          value: attacks.filter(
+            (attack) => attack.abuseipdb?.status === 'checked' || attack.abuseipdb?.status === 'cached'
+          ).length,
+        },
+        { label: 'Explotacion real (CVE)', value: attacks.filter((attack) => attack.vulnerability).length },
       ],
     },
     errors: input.errors,
